@@ -1,0 +1,90 @@
+# GoReleaser config for tfperms.
+#
+# Schema: v2 (https://goreleaser.com/customization/).
+#
+# Status (Epic 8 will flip this): `release.disable: true` keeps `goreleaser
+# release` from publishing anywhere. Snapshot builds via
+# `goreleaser release --snapshot --clean` are unaffected and are the
+# expected workflow until the GitHub publishing step is wired up.
+#
+# Build-matrix invariants (do not weaken without updating the PDR):
+#   - Linux + macOS + Windows on amd64 + arm64, except windows/arm64 which
+#     is explicitly ignored. There is no demand for it and it is not free
+#     to ship — drop it until someone asks.
+#   - All builds are CGO_ENABLED=0 static binaries. tfperms has no native
+#     dependencies and we want a single artifact that runs anywhere.
+#   - `-s -w` strips the symbol table and DWARF data. `-X main.version=...`
+#     and friends require `main.version` etc. to be `var` not `const` —
+#     see the comment in cmd/tfperms/main.go.
+
+version: 2
+
+project_name: tfperms
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tfperms
+    main: ./cmd/tfperms
+    binary: tfperms
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: tfperms
+    ids:
+      - tfperms
+    # v2 uses `formats:` (plural list). v1 used `format:` (singular). Do
+    # not "fix" this back to singular — the v2 schema check will reject it.
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  # Snapshot version embeds the short commit so `--version` clearly differs
+  # from the dev default `0.0.0-dev` — that is the Phase 3 verification.
+  version_template: "{{ incpatch .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  # Epic 8 flips this to false to enable GitHub Releases publishing. Until
+  # then, every `goreleaser release` invocation must stay local-only.
+  disable: true
