@@ -1,0 +1,23 @@
+# golangci-lint configuration.
+#
+# Schema: v2 (https://golangci-lint.run/usage/configuration/). The installed
+# binary is v2.x; the v1 schema is rejected by `golangci-lint config verify`.
+#
+# Linter selection mirrors the project spec. errcheck/govet/ineffassign/
+# staticcheck are default-enabled by golangci-lint, but we list them
+# explicitly so a future default-set change cannot silently weaken our
+# floor. `gofmt` was reclassified from a linter to a formatter in v2 and
+# must live under `formatters.enable` — placing it under `linters.enable`
+# fails schema validation.
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+
+formatters:
+  enable:
+    - gofmt
