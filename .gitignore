@@ -12,3 +12,8 @@ dist/
 *.test
 .idea/
 .vscode/
+
+# Scratch files from `make tidy-check` snapshot/restore. Normally cleaned up
+# at the end of the recipe; an interrupted run (Ctrl-C) can leave them behind.
+.go.mod.tidy-check.bak
+.go.sum.tidy-check.bak
