@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "tfperms",
+  "project_id": "e14cd1d1-0a6f-47a6-9966-91e3f366a438"
+}
