@@ -63,6 +63,49 @@ archives:
         formats:
           - zip
 
+# Homebrew formula generation.
+#
+# Snapshot rendering (`goreleaser release --snapshot --clean`) writes the
+# formula into `dist/homebrew/Formula/tfperms.rb` and never touches a remote.
+# That is the only verification this story performs; full
+# `brew install thoreinstein/tap/tfperms` is deferred to Epic 8 along with
+# flipping `release.disable: false`.
+#
+# Non-snapshot publishing requires:
+#   - HOMEBREW_TAP_GITHUB_TOKEN in the environment, set to a Personal Access
+#     Token with `repo` scope on github.com/thoreinstein/homebrew-tap. The
+#     default GITHUB_TOKEN is for this repo and cannot push to a different
+#     org/repo.
+#   - The tap repo `github.com/thoreinstein/homebrew-tap` must already exist,
+#     created out-of-band (Epic 8 verifies this before the first tagged
+#     release). GoReleaser's brews pipe will commit a Formula/tfperms.rb
+#     into that repo on release; it does not create the repo.
+#
+# Snapshot mode does NOT need the token — `skip_upload: auto` plus snapshot
+# semantics together guarantee no remote interaction during local runs.
+#
+# Schema note: GoReleaser v2 uses `directory:` for the path inside the tap
+# repo. v1 (and some older docs/specs) say `folder:` — that key is rejected
+# by `goreleaser check` against the v2 schema.
+brews:
+  - name: tfperms
+    ids:
+      - tfperms
+    repository:
+      owner: thoreinstein
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://github.com/thoreinstein/tfperms"
+    description: "Statically analyze Terraform GCP configs and report the minimum IAM permissions for plan and apply"
+    # `url_template` is set explicitly because `release.disable: true` prevents
+    # GoReleaser from deriving the default GitHub Releases URL. This template
+    # matches the URL GitHub Releases will serve once Epic 8 flips
+    # `release.disable` to false, so no edit is needed at that point.
+    url_template: "https://github.com/thoreinstein/tfperms/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    skip_upload: auto
+    test: |
+      system "#{bin}/tfperms", "--version"
+
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
