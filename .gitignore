@@ -5,3 +5,10 @@
 .beads-credential-key
 .claude/settings.local.json
 .worktrees/
+
+# Go build artifacts
+dist/
+/tfperms
+*.test
+.idea/
+.vscode/
