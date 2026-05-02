@@ -1,0 +1,33 @@
+{
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "summary": "locals form a dependency cycle",
+      "detail": "a, b",
+      "subject": {
+        "file": "main.tf",
+        "line": 2,
+        "col": 3
+      }
+    }
+  ],
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "b",
+      "file": "main.tf",
+      "line": 6,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "with-cycle"
+        },
+        {
+          "name": "ref",
+          "value": null
+        }
+      ]
+    }
+  ]
+}
