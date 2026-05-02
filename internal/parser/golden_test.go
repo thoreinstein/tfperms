@@ -45,7 +45,20 @@ import (
 // expected.json (true) or compares against it (false). Wired to the
 // `-update` flag so callers run `go test -update` to regenerate after an
 // intentional behaviour change.
-var updateGolden = flag.Bool("update", false, "rewrite testdata/parser/*/expected.json from current parser output")
+var updateGolden = flag.Bool("update", false, "rewrite testdata/{parser,modules}/*/expected.json from current parser output")
+
+// goldenRoots is the list of testdata roots TestGolden scans for
+// scenario subdirectories. Both directories are walked uniformly:
+// every immediate subdirectory becomes a sub-test named
+// "<root_basename>/<scenario>" so failures are unambiguous when the
+// same scenario name exists in two roots. testdata/parser/ holds the
+// general-purpose fixtures; testdata/modules/ is reserved for
+// recursion-focused scenarios that exercise LoadRecursive's local /
+// remote / nested / cycle paths.
+var goldenRoots = []string{
+	filepath.Join("testdata", "parser"),
+	filepath.Join("testdata", "modules"),
+}
 
 // goldenDoc is the JSON shape every expected.json file conforms to. The
 // struct ordering matches the JSON field order so a hand-edited golden
@@ -126,34 +139,41 @@ type goldenAttr struct {
 	Value any    `json:"value"`
 }
 
-// TestGolden discovers every immediate subdirectory of testdata/parser
-// and runs each as a sub-test. A subdirectory is a "scenario": its .tf
-// files (if any) are fed through FindTerraformFiles → Parse, and the
-// result is compared against (or written to) the scenario's
+// TestGolden discovers every immediate subdirectory of each goldenRoots
+// entry and runs each as a sub-test. A subdirectory is a "scenario":
+// its .tf files (if any) are fed through FindTerraformFiles → Parse,
+// and the result is compared against (or written to) the scenario's
 // expected.json.
 //
-// The harness intentionally accepts an empty testdata/parser/ tree —
-// the assertion is "every scenario directory matches its golden", so
-// zero scenarios is a vacuously-true pass. This lets phase 1 land the
-// driver before any scenarios are populated.
+// Sub-tests are named "<root_basename>/<scenario>" — e.g.
+// "parser/local-module" or "modules/diamond" — so a failure pinpoints
+// which root the offending fixture lives in and so two roots may
+// legally use the same scenario name without colliding.
+//
+// The harness intentionally accepts an empty / missing root: the
+// assertion is "every scenario directory matches its golden", so zero
+// scenarios is a vacuously-true pass. This lets a new root land
+// before any scenarios are populated.
 func TestGolden(t *testing.T) {
-	root := filepath.Join("testdata", "parser")
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			t.Skipf("no scenarios at %s", root)
-			return
+	for _, root := range goldenRoots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("read %s: %v", root, err)
 		}
-		t.Fatalf("read %s: %v", root, err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+		rootBase := filepath.Base(root)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := rootBase + "/" + e.Name()
+			scenarioDir := filepath.Join(root, e.Name())
+			t.Run(name, func(t *testing.T) {
+				runGoldenScenario(t, scenarioDir)
+			})
 		}
-		name := e.Name()
-		t.Run(name, func(t *testing.T) {
-			runGoldenScenario(t, filepath.Join(root, name))
-		})
 	}
 }
 
