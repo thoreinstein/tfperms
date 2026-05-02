@@ -141,9 +141,10 @@ type goldenAttr struct {
 
 // TestGolden discovers every immediate subdirectory of each goldenRoots
 // entry and runs each as a sub-test. A subdirectory is a "scenario":
-// its .tf files (if any) are fed through FindTerraformFiles → Parse,
-// and the result is compared against (or written to) the scenario's
-// expected.json.
+// the harness preflights it with FindTerraformFiles and then loads it
+// via LoadRecursive (which falls back to Parse for non-recursive
+// scenarios with no module calls), and the result is compared against
+// (or written to) the scenario's expected.json.
 //
 // Sub-tests are named "<root_basename>/<scenario>" — e.g.
 // "parser/local-module" or "modules/diamond" — so a failure pinpoints
