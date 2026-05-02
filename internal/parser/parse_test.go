@@ -762,6 +762,37 @@ module "registry" {
 	}
 }
 
+// TestLoadRecursive_EmptyDirArg pins the public-boundary contract
+// that LoadRecursive rejects an empty (or whitespace-only) dir
+// argument with an error rather than silently resolving "" to the
+// process working directory via filepath.Abs(""). The previous
+// implementation accepted "" and made behaviour depend on ambient
+// CWD state; this test guards against regressing back to that.
+func TestLoadRecursive_EmptyDirArg(t *testing.T) {
+	cases := []struct {
+		name string
+		dir  string
+	}{
+		{name: "empty", dir: ""},
+		{name: "whitespace", dir: "   "},
+		{name: "tab", dir: "\t"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, mods, diags, err := LoadRecursive(tc.dir)
+			if err == nil {
+				t.Fatalf("LoadRecursive(%q): expected error, got nil (res=%v mods=%v diags=%v)", tc.dir, res, mods, diags)
+			}
+			if res != nil || mods != nil || diags != nil {
+				t.Errorf("LoadRecursive(%q): expected nil slices on error, got res=%v mods=%v diags=%v", tc.dir, res, mods, diags)
+			}
+			if got := err.Error(); !strings.Contains(got, "LoadRecursive") || !strings.Contains(got, "empty") {
+				t.Errorf("LoadRecursive(%q) error = %q; want error mentioning LoadRecursive and empty", tc.dir, got)
+			}
+		})
+	}
+}
+
 // TestLoadRecursive_Empty proves the public contract on the trivial
 // case: a directory with a single resource file and no modules
 // produces the same Resource set Parse would, with each Resource
