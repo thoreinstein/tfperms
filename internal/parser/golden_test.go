@@ -150,29 +150,42 @@ type goldenAttr struct {
 // which root the offending fixture lives in and so two roots may
 // legally use the same scenario name without colliding.
 //
-// The harness intentionally accepts an empty / missing root: the
-// assertion is "every scenario directory matches its golden", so zero
-// scenarios is a vacuously-true pass. This lets a new root land
-// before any scenarios are populated.
+// Every entry in goldenRoots is treated as REQUIRED: the harness fails
+// loudly if a root directory is missing OR exists but contains no
+// scenario subdirectories. This is the regression contract — if a
+// committed fixture set is deleted from a checkout (intentionally or
+// not), the test must fail rather than silently degrade to a
+// vacuous pass. To retire a root, remove it from goldenRoots in the
+// same change that deletes the directory.
 func TestGolden(t *testing.T) {
 	for _, root := range goldenRoots {
 		entries, err := os.ReadDir(root)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			t.Fatalf("read %s: %v", root, err)
+			// No silent skip on os.IsNotExist: a missing required
+			// root means the regression suite has been moved out
+			// from under us. Use Errorf+continue (not Fatalf) so a
+			// run that breaks one root still validates the others.
+			t.Errorf("read %s: %v (required golden root must exist; remove from goldenRoots to retire)", root, err)
+			continue
 		}
 		rootBase := filepath.Base(root)
+		scenarios := 0
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
 			}
+			scenarios++
 			name := rootBase + "/" + e.Name()
 			scenarioDir := filepath.Join(root, e.Name())
 			t.Run(name, func(t *testing.T) {
 				runGoldenScenario(t, scenarioDir)
 			})
+		}
+		if scenarios == 0 {
+			// An existing-but-empty root is the same regression
+			// hazard as a missing root: a `rm -rf testdata/modules/*`
+			// would otherwise produce a silent green run.
+			t.Errorf("golden root %s contains no scenario subdirectories — fixtures appear to have been deleted", root)
 		}
 	}
 }
