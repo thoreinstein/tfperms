@@ -1,11 +1,56 @@
 package parser
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
-// TestParse_Empty anchors the package layout: Parse(nil) and Parse([]string{})
-// must return (nil, nil) without touching the filesystem. This is the contract
-// that lets cmd/tfperms call Parse unconditionally even when the walker
-// returned no files (although in practice the walker errors first).
+// writeFiles materialises a map of relative-path -> content under root and
+// returns the absolute paths in the order their keys were given. Test cases
+// pass a slice of names alongside the map so they can control the order
+// Parse sees the files in (which is what the deterministic-sort case
+// depends on); a plain range over the map would surrender that order to
+// Go's randomised map iteration.
+func writeFiles(t *testing.T, root string, files map[string]string, order []string) []string {
+	t.Helper()
+	paths := make([]string, 0, len(order))
+	for _, name := range order {
+		body, ok := files[name]
+		if !ok {
+			t.Fatalf("test bug: order references missing file %q", name)
+		}
+		full := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %q: %v", filepath.Dir(full), err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %q: %v", full, err)
+		}
+		paths = append(paths, full)
+	}
+	return paths
+}
+
+// resKey collapses a Resource into the (Kind, Type, Name) triple test cases
+// assert against. File and Line are checked separately when relevant; this
+// keeps the table rows compact.
+type resKey struct {
+	kind, typ, name string
+}
+
+func keysOf(rs []Resource) []resKey {
+	out := make([]resKey, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, resKey{r.Kind, r.Type, r.Name})
+	}
+	return out
+}
+
+// TestParse_Empty anchors the public contract: Parse(nil) and Parse([]) must
+// return (nil, nil) without touching the filesystem. cmd/tfperms relies on
+// this so it can call Parse unconditionally.
 func TestParse_Empty(t *testing.T) {
 	for _, in := range [][]string{nil, {}} {
 		got, err := Parse(in)
@@ -16,4 +61,277 @@ func TestParse_Empty(t *testing.T) {
 			t.Errorf("Parse(%v) = %v, want nil", in, got)
 		}
 	}
+}
+
+// TestParse covers the spec acceptance criteria as a single table. Each
+// row builds its own t.TempDir so cases are mutually isolated. The "order"
+// field controls the order Parse sees its input files in — important for
+// the deterministic-sort row, which deliberately gives the input slice in
+// reverse-name order to verify the result still sorts ascending.
+func TestParse(t *testing.T) {
+	cases := []struct {
+		name     string
+		files    map[string]string
+		order    []string
+		wantKeys []resKey // expected (Kind, Type, Name) order
+		wantErr  bool
+		errFrag  string // when wantErr, this substring must appear in err.Error()
+	}{
+		{
+			name: "single resource",
+			files: map[string]string{
+				"main.tf": `resource "google_storage_bucket" "b" {}`,
+			},
+			order:    []string{"main.tf"},
+			wantKeys: []resKey{{"resource", "google_storage_bucket", "b"}},
+		},
+		{
+			name: "multiple resources in one file",
+			files: map[string]string{
+				"main.tf": "" +
+					"resource \"google_storage_bucket\" \"a\" {}\n" +
+					"resource \"google_storage_bucket\" \"b\" {}\n" +
+					"resource \"google_compute_instance\" \"c\" {}\n",
+			},
+			order: []string{"main.tf"},
+			wantKeys: []resKey{
+				{"resource", "google_storage_bucket", "a"},
+				{"resource", "google_storage_bucket", "b"},
+				{"resource", "google_compute_instance", "c"},
+			},
+		},
+		{
+			name: "multi-file config merges uniformly",
+			files: map[string]string{
+				"a.tf": `resource "x" "a" {}`,
+				"b.tf": `resource "x" "b" {}`,
+			},
+			order: []string{"a.tf", "b.tf"},
+			wantKeys: []resKey{
+				{"resource", "x", "a"},
+				{"resource", "x", "b"},
+			},
+		},
+		{
+			name: "data block is extracted with Kind=data",
+			files: map[string]string{
+				"d.tf": `data "google_project" "p" {}`,
+			},
+			order:    []string{"d.tf"},
+			wantKeys: []resKey{{"data", "google_project", "p"}},
+		},
+		{
+			// Lists every top-level block kind the spec calls out as a
+			// "silent skip" except `backend` (which is never legal at top
+			// level — it only appears nested inside terraform { }) and
+			// `check` (whose nested `assert { condition = ... error_message
+			// = ... }` body is non-trivial to write inline; the
+			// schema-driven skip path treats it identically to the others
+			// shown here).
+			name: "non-resource/data top-level blocks silently skipped",
+			files: map[string]string{
+				"m.tf": "" +
+					"terraform { required_version = \">= 1.0\" }\n" +
+					"provider \"google\" { project = \"x\" }\n" +
+					"variable \"v\" { default = \"x\" }\n" +
+					"locals { x = 1 }\n" +
+					"module \"m\" { source = \"./mod\" }\n" +
+					"output \"o\" { value = 1 }\n" +
+					"resource \"google_storage_bucket\" \"b\" {}\n" +
+					"data \"google_project\" \"p\" {}\n",
+			},
+			order: []string{"m.tf"},
+			wantKeys: []resKey{
+				{"resource", "google_storage_bucket", "b"},
+				{"data", "google_project", "p"},
+			},
+		},
+		{
+			name: "deterministic sort across files even with reverse input order",
+			// z.tf is given first in input order, but result must list a.tf first.
+			files: map[string]string{
+				"z.tf": "" +
+					"resource \"x\" \"z\" {}\n" +
+					"resource \"x\" \"z2\" {}\n",
+				"a.tf": `resource "x" "a" {}`,
+			},
+			order: []string{"z.tf", "a.tf"},
+			wantKeys: []resKey{
+				{"resource", "x", "a"},
+				{"resource", "x", "z"},
+				{"resource", "x", "z2"},
+			},
+		},
+		{
+			name: "empty file produces no resources, no error",
+			files: map[string]string{
+				"empty.tf": "",
+			},
+			order:    []string{"empty.tf"},
+			wantKeys: nil,
+		},
+		{
+			name: "duplicate resource across files is preserved (dedup is Epic 5's job)",
+			files: map[string]string{
+				"a.tf": `resource "x" "dup" {}`,
+				"b.tf": `resource "x" "dup" {}`,
+			},
+			order: []string{"a.tf", "b.tf"},
+			wantKeys: []resKey{
+				{"resource", "x", "dup"},
+				{"resource", "x", "dup"},
+			},
+		},
+		{
+			name: "malformed HCL surfaces single-line file:line: error",
+			files: map[string]string{
+				"bad.tf": `resource "x" "y" {`, // missing closing brace
+			},
+			order:   []string{"bad.tf"},
+			wantErr: true,
+			errFrag: "bad.tf:",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := writeFiles(t, dir, tc.files, tc.order)
+
+			got, err := Parse(paths)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (result: %v)", got)
+				}
+				msg := err.Error()
+				if strings.Contains(msg, "\n") {
+					t.Errorf("error message must be single-line; got %q", msg)
+				}
+				if strings.Contains(msg, "panic:") || strings.Contains(msg, "goroutine") {
+					t.Errorf("error message must not contain stack-trace markers; got %q", msg)
+				}
+				if tc.errFrag != "" && !strings.Contains(msg, tc.errFrag) {
+					t.Errorf("error %q does not contain %q", msg, tc.errFrag)
+				}
+				// Pattern check: must contain ":<digit>:" somewhere (file:line: shape).
+				if !containsLineMarker(msg) {
+					t.Errorf("error %q does not match <file>:<line>: pattern", msg)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			gotKeys := keysOf(got)
+			if !equalResKeys(gotKeys, tc.wantKeys) {
+				t.Errorf("result keys = %v, want %v (full: %+v)", gotKeys, tc.wantKeys, got)
+			}
+			// Attrs invariant: every Resource has a non-nil empty Attrs map.
+			// This is the .5 hand-off contract — story .5 will remove the
+			// "empty" half of this assertion but should keep the non-nil half.
+			for i, r := range got {
+				if r.Attrs == nil {
+					t.Errorf("got[%d].Attrs is nil; must be non-nil even when empty", i)
+				}
+				if len(r.Attrs) != 0 {
+					t.Errorf("got[%d].Attrs has %d entries; must be empty at this stage", i, len(r.Attrs))
+				}
+			}
+		})
+	}
+}
+
+// TestParse_FileLineMetadata constructs a fixture with known line numbers
+// and verifies File holds the absolute path the caller passed in and Line
+// is the line of the block's `resource`/`data` keyword. Stories .5 and
+// Epic 6 (which prints file:line in CLI output) depend on these invariants.
+func TestParse_FileLineMetadata(t *testing.T) {
+	dir := t.TempDir()
+	src := "" +
+		"# comment line 1\n" + // line 1
+		"\n" + // line 2
+		"resource \"google_storage_bucket\" \"b\" {}\n" + // line 3
+		"\n" + // line 4
+		"data \"google_project\" \"p\" {}\n" // line 5
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d resources, want 2: %+v", len(got), got)
+	}
+	want := []Resource{
+		{Kind: "resource", Type: "google_storage_bucket", Name: "b", File: full, Line: 3},
+		{Kind: "data", Type: "google_project", Name: "p", File: full, Line: 5},
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.Kind != w.Kind || g.Type != w.Type || g.Name != w.Name || g.File != w.File || g.Line != w.Line {
+			t.Errorf("got[%d]=%+v, want %+v", i, g, w)
+		}
+	}
+}
+
+// TestParse_DeterministicAcrossRuns runs the same multi-file fixture many
+// times and asserts the result order is identical each time. Go's sort is
+// stable so this is paranoia, but it specifically defends against a future
+// change reintroducing nondeterminism (e.g. switching to map-based block
+// collection without a final sort).
+func TestParse_DeterministicAcrossRuns(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"z.tf": "resource \"x\" \"z1\" {}\nresource \"x\" \"z2\" {}\n",
+		"m.tf": `resource "x" "m" {}`,
+		"a.tf": `resource "x" "a" {}`,
+	}
+	paths := writeFiles(t, dir, files, []string{"z.tf", "m.tf", "a.tf"})
+
+	first, err := Parse(paths)
+	if err != nil {
+		t.Fatalf("first Parse: %v", err)
+	}
+	for i := 0; i < 20; i++ {
+		got, err := Parse(paths)
+		if err != nil {
+			t.Fatalf("iter %d: %v", i, err)
+		}
+		if !equalResKeys(keysOf(got), keysOf(first)) {
+			t.Fatalf("iter %d order differs from first: %v vs %v", i, keysOf(got), keysOf(first))
+		}
+	}
+}
+
+// containsLineMarker checks that msg has a ":<digit>" sequence — the
+// minimum shape that proves a line number was interpolated. We avoid a
+// regex to keep test-only dependencies out of the package.
+func containsLineMarker(msg string) bool {
+	for i := 0; i < len(msg)-1; i++ {
+		if msg[i] != ':' {
+			continue
+		}
+		c := msg[i+1]
+		if c >= '0' && c <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func equalResKeys(a, b []resKey) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
