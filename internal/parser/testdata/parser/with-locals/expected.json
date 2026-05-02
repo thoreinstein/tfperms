@@ -1,0 +1,25 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "b",
+      "file": "main.tf",
+      "line": 11,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "tfperms-us-east1"
+        },
+        {
+          "name": "prefix",
+          "value": "tfperms"
+        },
+        {
+          "name": "region",
+          "value": "us-east1"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "b",
+      "file": "main.tf",
+      "line": 9,
+      "attrs": [
+        {
+          "name": "fallback",
+          "value": null
+        },
+        {
+          "name": "region",
+          "value": "us-east1"
+        }
+      ]
+    }
+  ]
+}

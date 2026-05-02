@@ -1,0 +1,25 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "kept",
+      "file": "main.tf",
+      "line": 25,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "kept"
+        }
+      ]
+    },
+    {
+      "kind": "data",
+      "type": "google_project",
+      "name": "kept_data",
+      "file": "main.tf",
+      "line": 29,
+      "attrs": []
+    }
+  ]
+}
