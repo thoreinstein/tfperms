@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -51,16 +52,19 @@ func keysOf(rs []Resource) []resKey {
 }
 
 // TestParse_Empty anchors the public contract: Parse(nil) and Parse([]) must
-// return (nil, nil) without touching the filesystem. cmd/tfperms relies on
-// this so it can call Parse unconditionally.
+// return (nil, nil, nil) without touching the filesystem. cmd/tfperms relies
+// on this so it can call Parse unconditionally.
 func TestParse_Empty(t *testing.T) {
 	for _, in := range [][]string{nil, {}} {
-		got, err := Parse(in)
+		got, diags, err := Parse(in)
 		if err != nil {
 			t.Errorf("Parse(%v) error: %v", in, err)
 		}
 		if got != nil {
 			t.Errorf("Parse(%v) = %v, want nil", in, got)
+		}
+		if diags != nil {
+			t.Errorf("Parse(%v) diags = %v, want nil", in, diags)
 		}
 	}
 }
@@ -200,7 +204,7 @@ func TestParse(t *testing.T) {
 			dir := t.TempDir()
 			paths := writeFiles(t, dir, tc.files, tc.order)
 
-			got, err := Parse(paths)
+			got, diags, err := Parse(paths)
 
 			if tc.wantErr {
 				if err == nil {
@@ -225,6 +229,13 @@ func TestParse(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+			// None of the existing rows declares cyclic locals, so the
+			// diagnostics slice must be empty for every fixture in this
+			// table. A future row that needs cycle warnings should split
+			// out into its own test.
+			if len(diags) != 0 {
+				t.Errorf("unexpected diagnostics: %v", diags)
 			}
 			gotKeys := keysOf(got)
 			if !equalResKeys(gotKeys, tc.wantKeys) {
@@ -261,9 +272,12 @@ func TestParse_FileLineMetadata(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, err := Parse([]string{full})
+	got, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("unexpected diagnostics: %v", diags)
 	}
 	if len(got) != 2 {
 		t.Fatalf("got %d resources, want 2: %+v", len(got), got)
@@ -301,9 +315,12 @@ func TestParse_AttrsPopulated(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, err := Parse([]string{full})
+	got, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("unexpected diagnostics: %v", diags)
 	}
 	if len(got) != 1 {
 		t.Fatalf("got %d resources, want 1: %+v", len(got), got)
@@ -334,18 +351,94 @@ func TestParse_DeterministicAcrossRuns(t *testing.T) {
 	}
 	paths := writeFiles(t, dir, files, []string{"z.tf", "m.tf", "a.tf"})
 
-	first, err := Parse(paths)
+	first, _, err := Parse(paths)
 	if err != nil {
 		t.Fatalf("first Parse: %v", err)
 	}
 	for i := 0; i < 20; i++ {
-		got, err := Parse(paths)
+		got, _, err := Parse(paths)
 		if err != nil {
 			t.Fatalf("iter %d: %v", i, err)
 		}
 		if !equalResKeys(keysOf(got), keysOf(first)) {
 			t.Fatalf("iter %d order differs from first: %v vs %v", i, keysOf(got), keysOf(first))
 		}
+	}
+}
+
+// TestParse_VarLocalReferencesResolve proves the story .6 wire-up at the
+// Parse boundary: a fixture with `variable`, `locals`, and a resource
+// that references both must produce a Resource whose Attrs entries
+// resolve to the literal values, not cty.NilVal. This complements
+// evalctx_test.go (which tests buildEvalContext in isolation) by
+// defending against a regression that drops the buildEvalContext call
+// site or hands extractAttrs the empty context again.
+func TestParse_VarLocalReferencesResolve(t *testing.T) {
+	dir := t.TempDir()
+	src := "" +
+		"variable \"region\" { default = \"us-east1\" }\n" +
+		"locals { region_copy = var.region }\n" +
+		"resource \"google_storage_bucket\" \"b\" {\n" +
+		"  region = var.region\n" +
+		"  copy   = local.region_copy\n" +
+		"}\n"
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, diags, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("unexpected diagnostics: %v", diags)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(got), got)
+	}
+	r := got[0]
+	want := cty.StringVal("us-east1")
+	if r.Attrs["region"] == cty.NilVal || !r.Attrs["region"].Equals(want).True() {
+		t.Errorf("Attrs[region] = %#v, want %#v", r.Attrs["region"], want)
+	}
+	if r.Attrs["copy"] == cty.NilVal || !r.Attrs["copy"].Equals(want).True() {
+		t.Errorf("Attrs[copy] = %#v, want %#v", r.Attrs["copy"], want)
+	}
+}
+
+// TestParse_CycleEmitsWarning proves that locals dependency cycles
+// surface as warning-severity diagnostics on Parse's middle return
+// without escalating to an error. The Resource list is otherwise normal.
+func TestParse_CycleEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	src := "" +
+		"locals {\n" +
+		"  a = local.b\n" +
+		"  b = local.a\n" +
+		"}\n" +
+		"resource \"x\" \"y\" {}\n"
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, diags, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(got), got)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("expected exactly one diagnostic, got %d: %v", len(diags), diags)
+	}
+	d := diags[0]
+	if d.Severity != hcl.DiagWarning {
+		t.Errorf("severity = %v, want DiagWarning", d.Severity)
+	}
+	if !strings.Contains(d.Detail, "a") || !strings.Contains(d.Detail, "b") {
+		t.Errorf("Detail %q must name both cycle members 'a' and 'b'", d.Detail)
 	}
 }
 

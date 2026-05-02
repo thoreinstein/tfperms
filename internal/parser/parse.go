@@ -37,15 +37,14 @@ import (
 //     arguments (provider, depends_on, count, for_each — the latter two
 //     belong to story .7's count/for_each routing). Nested blocks
 //     (lifecycle, dynamic, provisioner, ...) do not contribute keys.
-//     Each value is either a fully-resolved cty.Value (literals;
-//     var.X / local.X resolved through the eval context) or cty.NilVal
-//     when the right-hand side could not be evaluated at this stage
-//     (function calls, interpolations referencing unknowns, cross-
-//     resource references, missing variables/locals). Until story .6
-//     wires a populated *hcl.EvalContext into Parse, var.X and local.X
-//     references resolve to cty.NilVal end-to-end; literal-only blocks
-//     are unaffected. Callers that need richer resolution should treat
-//     cty.NilVal as "deferred / unknown" rather than "absent".
+//     Each value is either a fully-resolved cty.Value (literals; var.X
+//     / local.X resolved through the eval context built from the
+//     config's `variable` and `locals` blocks — see evalctx.go) or
+//     cty.NilVal when the right-hand side could not be evaluated at
+//     this stage (function calls, interpolations referencing unknowns,
+//     cross-resource references, missing/unresolved variables/locals).
+//     Callers that need richer resolution should treat cty.NilVal as
+//     "deferred / unknown" rather than "absent".
 type Resource struct {
 	Kind  string
 	Type  string
@@ -84,6 +83,15 @@ var topLevelSchema = &hcl.BodySchema{
 // (File, Line). Other top-level block types are silently skipped (see
 // topLevelSchema for the rationale).
 //
+// Returns:
+//   - The Resource slice (sorted, deterministic).
+//   - hcl.Diagnostics carrying warning-severity entries only — currently
+//     used by buildEvalContext to surface locals dependency cycles.
+//     Callers may log/format these but Parse itself never escalates a
+//     warning to an error. The slice is nil when there is nothing to
+//     report.
+//   - error for hard failures only.
+//
 // Errors:
 //   - I/O failures reading any file are wrapped via fmt.Errorf("read %s: %w", ...)
 //     so callers can match against fs.ErrNotExist and friends.
@@ -94,26 +102,32 @@ var topLevelSchema = &hcl.BodySchema{
 //     message stays single-line — Detail tends to span multiple lines and
 //     "must not leak through" per the parser error contract.
 //
-// The empty-input case (nil or empty slice) returns (nil, nil) without
-// touching the filesystem; the walker errors out earlier when a directory
-// has no .tf files, so this code path is mostly defensive.
-func Parse(files []string) ([]Resource, error) {
+// The empty-input case (nil or empty slice) returns (nil, nil, nil)
+// without touching the filesystem; the walker errors out earlier when a
+// directory has no .tf files, so this code path is mostly defensive.
+func Parse(files []string) ([]Resource, hcl.Diagnostics, error) {
 	if len(files) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	parsed := make([]*hcl.File, 0, len(files))
 	for _, path := range files {
 		src, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read %q: %w", path, err)
+			return nil, nil, fmt.Errorf("read %q: %w", path, err)
 		}
 		f, diags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
-			return nil, formatDiag(diags)
+			return nil, nil, formatDiag(diags)
 		}
 		parsed = append(parsed, f)
 	}
+
+	// Build the static eval context BEFORE MergeFiles so buildEvalContext
+	// can iterate per-file *hclsyntax.Body — MergeFiles returns an opaque
+	// merged body that cannot be cast back, and we want per-file Subject
+	// ranges on cycle warnings.
+	evalCtx, evalDiags := buildEvalContext(parsed)
 
 	// MergeFiles unifies the bodies into a single hcl.Body the schema-based
 	// extractor can iterate once. The returned body is an internal
@@ -132,16 +146,8 @@ func Parse(files []string) ([]Resource, error) {
 	// warnings — those would have come from Content.
 	content, _, diags := mergedBody.PartialContent(topLevelSchema)
 	if diags.HasErrors() {
-		return nil, formatDiag(diags)
+		return nil, nil, formatDiag(diags)
 	}
-
-	// evalCtx is the context attribute resolution evaluates against. Story
-	// .5 deliberately leaves Variables empty: literals resolve fine
-	// without it, and var.X / local.X collapse to cty.NilVal — exactly
-	// the lazy-resolution contract documented on Resource.Attrs. Story .6
-	// will populate Variables (and possibly Functions) here without any
-	// further surgery to extractAttrs.
-	evalCtx := &hcl.EvalContext{Variables: map[string]cty.Value{}}
 
 	out := make([]Resource, 0, len(content.Blocks))
 	for _, blk := range content.Blocks {
@@ -170,7 +176,7 @@ func Parse(files []string) ([]Resource, error) {
 		return out[i].Line < out[j].Line
 	})
 
-	return out, nil
+	return out, evalDiags, nil
 }
 
 // formatDiag flattens HCL diagnostics into a single-line
