@@ -96,7 +96,7 @@ func Parse(files []string) ([]Resource, error) {
 	for _, path := range files {
 		src, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, err)
+			return nil, fmt.Errorf("read %q: %w", path, err)
 		}
 		f, diags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
