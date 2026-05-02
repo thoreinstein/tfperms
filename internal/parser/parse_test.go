@@ -1016,17 +1016,33 @@ func TestLoadRecursive_NonLocalModuleNotRecursed(t *testing.T) {
 	}
 }
 
+// findCycleDiagnostic returns the first "module recursion cycle"
+// warning in diags, or nil if there isn't one. Pulled out so the
+// per-shape cycle tests below all use the same lookup and read the same
+// way at the call site.
+func findCycleDiagnostic(diags hcl.Diagnostics) *hcl.Diagnostic {
+	for _, d := range diags {
+		if d.Summary == "module recursion cycle" {
+			return d
+		}
+	}
+	return nil
+}
+
 // TestLoadRecursive_Cycle proves the cycle-detection contract: a
 // module that recurses into a directory currently up the call stack
 // must produce a "module recursion cycle" warning rather than
-// recursing indefinitely. The configuration loads as if the cycle
-// edge had been pruned.
+// recursing indefinitely, AND the warning's Detail must name the full
+// directory sequence that closes the cycle (root -> a -> root) so
+// users can tell at a glance which call site to fix. The
+// configuration loads as if the cycle edge had been pruned.
 //
 // We construct the cycle as root → a → root via a "../" back-reference
 // because classifySource treats source = "." as SourceUnknown
 // (only "./" and "../" prefixes count as local), so a self-cycle
 // expressed as `source = "."` would be pruned at the SourceKind gate
-// before the cycle detector ever ran.
+// before the cycle detector ever ran. The dedicated self-cycle test
+// below uses "./" instead.
 func TestLoadRecursive_Cycle(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`module "a" { source = "./a" }`), 0o644); err != nil {
@@ -1039,18 +1055,201 @@ func TestLoadRecursive_Cycle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(aDir, "main.tf"), []byte(`module "back" { source = "../" }`), 0o644); err != nil {
 		t.Fatalf("write a: %v", err)
 	}
+	absRoot, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	absA := filepath.Join(absRoot, "a")
+
 	_, _, diags, err := LoadRecursive(dir)
 	if err != nil {
 		t.Fatalf("LoadRecursive: %v", err)
 	}
+	cycleDiag := findCycleDiagnostic(diags)
+	if cycleDiag == nil {
+		t.Fatalf("expected cycle warning, got %v", diags)
+	}
+	wantSeq := absRoot + " -> " + absA + " -> " + absRoot
+	if !strings.Contains(cycleDiag.Detail, wantSeq) {
+		t.Errorf("cycle detail = %q\nwant it to contain sequence %q", cycleDiag.Detail, wantSeq)
+	}
+}
+
+// TestLoadRecursive_SelfCycle covers the degenerate cycle where a
+// module's source resolves to its own declaring directory
+// (`source = "./"`). The cycle path must surface as `<absRoot> ->
+// <absRoot>` — first and last entries equal, with no intervening hops,
+// so a reader can immediately recognise the self-loop.
+//
+// "./" is the chosen self-source rather than "." because classifySource
+// only treats prefixes "./" and "../" as SourceLocal — a bare "." is
+// SourceUnknown and would not even reach the cycle detector.
+func TestLoadRecursive_SelfCycle(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`module "self" { source = "./" }`), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	absRoot, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+
+	_, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	cycleDiag := findCycleDiagnostic(diags)
+	if cycleDiag == nil {
+		t.Fatalf("expected cycle warning, got %v", diags)
+	}
+	wantSeq := absRoot + " -> " + absRoot
+	if !strings.Contains(cycleDiag.Detail, wantSeq) {
+		t.Errorf("cycle detail = %q\nwant it to contain sequence %q", cycleDiag.Detail, wantSeq)
+	}
+}
+
+// TestLoadRecursive_MultiNodeCycle covers a three-node cycle:
+// root -> a -> b -> root. The detail string must list every directory
+// that participated in the cycle so a reader can see the full chain
+// rather than just the closing pair.
+func TestLoadRecursive_MultiNodeCycle(t *testing.T) {
+	dir := t.TempDir()
+	aDir := filepath.Join(dir, "a")
+	bDir := filepath.Join(aDir, "b")
+	if err := os.MkdirAll(bDir, 0o755); err != nil {
+		t.Fatalf("mkdir a/b: %v", err)
+	}
+	mustWrite := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	mustWrite(filepath.Join(dir, "main.tf"), `module "a" { source = "./a" }`)
+	mustWrite(filepath.Join(aDir, "main.tf"), `module "b" { source = "./b" }`)
+	mustWrite(filepath.Join(bDir, "main.tf"), `module "back" { source = "../../" }`)
+
+	absRoot, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	absA := filepath.Join(absRoot, "a")
+	absB := filepath.Join(absA, "b")
+
+	_, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	cycleDiag := findCycleDiagnostic(diags)
+	if cycleDiag == nil {
+		t.Fatalf("expected cycle warning, got %v", diags)
+	}
+	wantSeq := absRoot + " -> " + absA + " -> " + absB + " -> " + absRoot
+	if !strings.Contains(cycleDiag.Detail, wantSeq) {
+		t.Errorf("cycle detail = %q\nwant it to contain sequence %q", cycleDiag.Detail, wantSeq)
+	}
+}
+
+// TestLoadRecursive_DiamondDependency proves the negative case: a
+// module reached via two distinct paths from a common ancestor (root
+// -> a -> shared, root -> b -> shared) is NOT a cycle, because at the
+// time we re-enter `shared` the recursion stack does not contain it —
+// only the parent on each branch does. The walk must complete with no
+// cycle warning, and a resource declared in `shared` must appear in
+// the result (instantiated once per call site, so twice in total).
+func TestLoadRecursive_DiamondDependency(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"a", "b", "shared"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	mustWrite := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	mustWrite(filepath.Join(dir, "main.tf"), `
+module "a" { source = "./a" }
+module "b" { source = "./b" }
+`)
+	mustWrite(filepath.Join(dir, "a", "main.tf"), `module "shared" { source = "../shared" }`)
+	mustWrite(filepath.Join(dir, "b", "main.tf"), `module "shared" { source = "../shared" }`)
+	mustWrite(filepath.Join(dir, "shared", "main.tf"), `resource "x" "leaf" {}`)
+
+	res, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if cycleDiag := findCycleDiagnostic(diags); cycleDiag != nil {
+		t.Fatalf("diamond dependency wrongly flagged as cycle: %v", cycleDiag)
+	}
+
+	// The shared module's resource is instantiated at both call sites,
+	// so we expect two copies with distinct ModulePaths.
+	leafCount := 0
+	pathSet := map[string]bool{}
+	for _, r := range res {
+		if r.Type == "x" && r.Name == "leaf" {
+			leafCount++
+			if len(r.ModulePath) > 0 {
+				pathSet[r.ModulePath[0]] = true
+			}
+		}
+	}
+	if leafCount != 2 {
+		t.Errorf("expected 2 instances of resource leaf, got %d (resources=%+v)", leafCount, res)
+	}
+	if !pathSet["a"] || !pathSet["b"] {
+		t.Errorf("expected instances under both module \"a\" and module \"b\", got paths=%v", pathSet)
+	}
+}
+
+// TestLoadRecursive_CycleGracefulRecovery proves that detecting a
+// cycle in one module branch does not abort the walk: a sibling branch
+// that is well-formed must still contribute its resources to the
+// result. The cycle is reported as a warning (not an error), and the
+// caller still receives the full set of valid resources.
+func TestLoadRecursive_CycleGracefulRecovery(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"cyclic", "good"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	mustWrite := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	mustWrite(filepath.Join(dir, "main.tf"), `
+module "cyclic" { source = "./cyclic" }
+module "good"   { source = "./good" }
+`)
+	mustWrite(filepath.Join(dir, "cyclic", "main.tf"), `module "back" { source = "../" }`)
+	mustWrite(filepath.Join(dir, "good", "main.tf"), `resource "x" "y" {}`)
+
+	res, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if findCycleDiagnostic(diags) == nil {
+		t.Fatalf("expected cycle warning for cyclic branch, got %v", diags)
+	}
+
+	// The good branch must still surface its resource even though the
+	// cyclic branch produced a warning.
 	found := false
-	for _, d := range diags {
-		if d.Summary == "module recursion cycle" {
+	for _, r := range res {
+		if r.Type == "x" && r.Name == "y" && len(r.ModulePath) > 0 && r.ModulePath[0] == "good" {
 			found = true
+			break
 		}
 	}
 	if !found {
-		t.Errorf("expected cycle warning, got %v", diags)
+		t.Errorf("expected resource x.y under module \"good\" to survive sibling cycle, got resources=%+v", res)
 	}
 }
 
