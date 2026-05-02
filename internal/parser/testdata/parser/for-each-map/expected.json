@@ -1,0 +1,21 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "many",
+      "file": "main.tf",
+      "line": 8,
+      "attrs": [
+        {
+          "name": "location",
+          "value": null
+        },
+        {
+          "name": "name",
+          "value": null
+        }
+      ]
+    }
+  ]
+}
