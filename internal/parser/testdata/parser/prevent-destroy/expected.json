@@ -1,0 +1,44 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "locked",
+      "file": "main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "locked"
+        }
+      ],
+      "prevent_destroy": true
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "unlocked_explicit",
+      "file": "main.tf",
+      "line": 9,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "unlocked_explicit"
+        }
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "unlocked_implicit",
+      "file": "main.tf",
+      "line": 17,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "unlocked_implicit"
+        }
+      ]
+    }
+  ]
+}

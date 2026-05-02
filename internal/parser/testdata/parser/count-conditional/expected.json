@@ -1,0 +1,17 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "enabled",
+      "file": "main.tf",
+      "line": 9,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "enabled"
+        }
+      ]
+    }
+  ]
+}
