@@ -36,17 +36,33 @@ func writeFiles(t *testing.T, root string, files map[string]string, order []stri
 	return paths
 }
 
-// resKey collapses a Resource into the (Kind, Type, Name) triple test cases
-// assert against. File and Line are checked separately when relevant; this
-// keeps the table rows compact.
+// resKey collapses a Resource into the (Kind, Type, Name, ModulePath)
+// tuple test cases assert against. File and Line are checked separately
+// when relevant; this keeps the table rows compact. ModulePath is
+// collapsed to a single "/"-joined string so resKey remains a comparable
+// (==-friendly) value type — slices cannot appear in a struct key without
+// breaking the equality used by equalResKeys.
 type resKey struct {
 	kind, typ, name string
+	modulePath      string
+}
+
+// rk is a constructor for the common root-level case (no module path)
+// so existing test rows stay compact. Tests asserting nested-module
+// resources pass modulePath via a resKey literal directly.
+func rk(kind, typ, name string) resKey {
+	return resKey{kind: kind, typ: typ, name: name}
 }
 
 func keysOf(rs []Resource) []resKey {
 	out := make([]resKey, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, resKey{r.Kind, r.Type, r.Name})
+		out = append(out, resKey{
+			kind:       r.Kind,
+			typ:        r.Type,
+			name:       r.Name,
+			modulePath: strings.Join(r.ModulePath, "/"),
+		})
 	}
 	return out
 }
@@ -93,7 +109,7 @@ func TestParse(t *testing.T) {
 				"main.tf": `resource "google_storage_bucket" "b" {}`,
 			},
 			order:    []string{"main.tf"},
-			wantKeys: []resKey{{"resource", "google_storage_bucket", "b"}},
+			wantKeys: []resKey{rk("resource", "google_storage_bucket", "b")},
 		},
 		{
 			name: "multiple resources in one file",
@@ -105,9 +121,9 @@ func TestParse(t *testing.T) {
 			},
 			order: []string{"main.tf"},
 			wantKeys: []resKey{
-				{"resource", "google_storage_bucket", "a"},
-				{"resource", "google_storage_bucket", "b"},
-				{"resource", "google_compute_instance", "c"},
+				rk("resource", "google_storage_bucket", "a"),
+				rk("resource", "google_storage_bucket", "b"),
+				rk("resource", "google_compute_instance", "c"),
 			},
 		},
 		{
@@ -118,8 +134,8 @@ func TestParse(t *testing.T) {
 			},
 			order: []string{"a.tf", "b.tf"},
 			wantKeys: []resKey{
-				{"resource", "x", "a"},
-				{"resource", "x", "b"},
+				rk("resource", "x", "a"),
+				rk("resource", "x", "b"),
 			},
 		},
 		{
@@ -128,7 +144,7 @@ func TestParse(t *testing.T) {
 				"d.tf": `data "google_project" "p" {}`,
 			},
 			order:    []string{"d.tf"},
-			wantKeys: []resKey{{"data", "google_project", "p"}},
+			wantKeys: []resKey{rk("data", "google_project", "p")},
 		},
 		{
 			// Lists every top-level block kind the spec calls out as a
@@ -152,8 +168,8 @@ func TestParse(t *testing.T) {
 			},
 			order: []string{"m.tf"},
 			wantKeys: []resKey{
-				{"resource", "google_storage_bucket", "b"},
-				{"data", "google_project", "p"},
+				rk("resource", "google_storage_bucket", "b"),
+				rk("data", "google_project", "p"),
 			},
 		},
 		{
@@ -167,9 +183,9 @@ func TestParse(t *testing.T) {
 			},
 			order: []string{"z.tf", "a.tf"},
 			wantKeys: []resKey{
-				{"resource", "x", "a"},
-				{"resource", "x", "z"},
-				{"resource", "x", "z2"},
+				rk("resource", "x", "a"),
+				rk("resource", "x", "z"),
+				rk("resource", "x", "z2"),
 			},
 		},
 		{
@@ -188,8 +204,8 @@ func TestParse(t *testing.T) {
 			},
 			order: []string{"a.tf", "b.tf"},
 			wantKeys: []resKey{
-				{"resource", "x", "dup"},
-				{"resource", "x", "dup"},
+				rk("resource", "x", "dup"),
+				rk("resource", "x", "dup"),
 			},
 		},
 		{

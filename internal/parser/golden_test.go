@@ -106,6 +106,13 @@ type goldenResrc struct {
 	Attrs          []goldenAttr `json:"attrs"`
 	DynamicBlocks  []string     `json:"dynamic_blocks,omitempty"`
 	PreventDestroy bool         `json:"prevent_destroy,omitempty"`
+	// ModulePath is omitted when empty so root-level resources (the
+	// majority of fixtures) keep their pre-recursion goldens
+	// byte-identical. A non-empty path renders as a JSON array of
+	// module names from root down to this resource's enclosing
+	// module — e.g. ["foo", "bar"] for `module "bar"` nested inside
+	// `module "foo"`.
+	ModulePath []string `json:"module_path,omitempty"`
 }
 
 // goldenAttr pairs an attribute name with its serialised cty.Value. The
@@ -333,6 +340,7 @@ func projectResource(r Resource, absDir string) goldenResrc {
 		Attrs:          projectAttrs(r.Attrs),
 		DynamicBlocks:  r.DynamicBlocks,
 		PreventDestroy: r.PreventDestroy,
+		ModulePath:     r.ModulePath,
 	}
 }
 
