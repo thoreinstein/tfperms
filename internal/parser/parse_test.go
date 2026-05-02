@@ -761,3 +761,264 @@ module "registry" {
 		t.Errorf("expected warning for non-local module source, got none in %v", diags)
 	}
 }
+
+// TestLoadRecursive_Empty proves the public contract on the trivial
+// case: a directory with a single resource file and no modules
+// produces the same Resource set Parse would, with each Resource
+// carrying an empty ModulePath. This is the regression line that
+// guards against LoadRecursive accidentally tagging root resources
+// with a stale path.
+func TestLoadRecursive_Empty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`resource "x" "root" {}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	res, mods, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("unexpected diagnostics: %v", diags)
+	}
+	if len(mods) != 0 {
+		t.Errorf("expected no modules, got %v", mods)
+	}
+	if len(res) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(res), res)
+	}
+	if got := res[0]; got.Name != "root" || len(got.ModulePath) != 0 {
+		t.Errorf("got %+v, want Name=root with empty ModulePath", got)
+	}
+}
+
+// TestLoadRecursive_LocalModule proves the basic recursion happy
+// path: root calls one local module, the module's resource appears
+// in the result with ModulePath equal to the call name. This is the
+// path the local-module golden scenario also exercises; the unit
+// test pins the contract at the API boundary so a future refactor
+// that breaks the wiring fails here before the golden does.
+func TestLoadRecursive_LocalModule(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`module "child" { source = "./mod" }`), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	modDir := filepath.Join(dir, "mod")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "main.tf"), []byte(`resource "x" "leaf" {}`), 0o644); err != nil {
+		t.Fatalf("write mod: %v", err)
+	}
+
+	res, mods, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("unexpected diagnostics: %v", diags)
+	}
+	if len(mods) != 1 || mods[0].Name != "child" {
+		t.Fatalf("expected 1 module call named child, got %v", mods)
+	}
+	if len(res) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(res), res)
+	}
+	if got := res[0]; got.Name != "leaf" {
+		t.Errorf("got Name %q, want \"leaf\"", got.Name)
+	}
+	if got := res[0].ModulePath; len(got) != 1 || got[0] != "child" {
+		t.Errorf("ModulePath = %v, want [child]", got)
+	}
+}
+
+// TestLoadRecursive_DuplicateInstantiation proves the "duplicated
+// resources, distinct ModulePaths" contract: a single module called
+// from two different sites must contribute its resources twice in
+// the output, each tagged with a distinct ModulePath. The deep-copy
+// invariant on ModulePath is critical here — a shared underlying
+// slice would let one instantiation overwrite the other.
+func TestLoadRecursive_DuplicateInstantiation(t *testing.T) {
+	dir := t.TempDir()
+	root := `
+module "x" { source = "./mod" }
+module "y" { source = "./mod" }
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(root), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	modDir := filepath.Join(dir, "mod")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "main.tf"), []byte(`resource "x" "leaf" {}`), 0o644); err != nil {
+		t.Fatalf("write mod: %v", err)
+	}
+
+	res, _, _, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("expected 2 instantiated resources, got %d: %+v", len(res), res)
+	}
+	got := []string{strings.Join(res[0].ModulePath, "/"), strings.Join(res[1].ModulePath, "/")}
+	want := map[string]bool{"x": true, "y": true}
+	for _, p := range got {
+		if !want[p] {
+			t.Errorf("unexpected ModulePath %q in %v", p, got)
+		}
+		delete(want, p)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing ModulePaths %v in %v", want, got)
+	}
+	// Mutating one ModulePath must not affect the other (deep copy).
+	res[0].ModulePath[0] = "MUTATED"
+	if res[1].ModulePath[0] == "MUTATED" {
+		t.Errorf("ModulePath slices share storage; mutation leaked across instantiations")
+	}
+}
+
+// TestLoadRecursive_NestedModules proves multi-level path
+// accumulation: root → A → B contributes B's resources tagged with
+// ModulePath = ["a", "b"]. Order of accumulation matters; the path
+// must run root-to-leaf, not leaf-to-root.
+func TestLoadRecursive_NestedModules(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`module "a" { source = "./a" }`), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	aDir := filepath.Join(dir, "a")
+	if err := os.MkdirAll(aDir, 0o755); err != nil {
+		t.Fatalf("mkdir a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(aDir, "main.tf"), []byte(`module "b" { source = "./b" }`), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	bDir := filepath.Join(aDir, "b")
+	if err := os.MkdirAll(bDir, 0o755); err != nil {
+		t.Fatalf("mkdir b: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bDir, "main.tf"), []byte(`resource "x" "deep" {}`), 0o644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+
+	res, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("unexpected diagnostics: %v", diags)
+	}
+	if len(res) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(res), res)
+	}
+	want := []string{"a", "b"}
+	got := res[0].ModulePath
+	if len(got) != len(want) {
+		t.Fatalf("ModulePath = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ModulePath[%d] = %q, want %q (full %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestLoadRecursive_MissingLocalSource proves the graceful-degrade
+// contract: a `module` block whose local source does not resolve to
+// a directory must produce a warning diagnostic but not a hard
+// error. The rest of the configuration loads as usual.
+func TestLoadRecursive_MissingLocalSource(t *testing.T) {
+	dir := t.TempDir()
+	src := `
+module "broken" { source = "./does-not-exist" }
+resource "x" "kept" {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	res, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if len(res) != 1 || res[0].Name != "kept" {
+		t.Fatalf("expected the sibling resource to survive, got %+v", res)
+	}
+	found := false
+	for _, d := range diags {
+		if d.Severity == hcl.DiagWarning && d.Summary == "could not load local module" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'could not load local module' warning, got %v", diags)
+	}
+}
+
+// TestLoadRecursive_NonLocalModuleNotRecursed proves the SourceKind
+// gate: non-local sources continue to emit the existing "non-local
+// module source" warning from extractModule and are NOT walked.
+// This is the regression line for the v1 non-goal of fetching
+// remote modules.
+func TestLoadRecursive_NonLocalModuleNotRecursed(t *testing.T) {
+	dir := t.TempDir()
+	src := `module "remote" { source = "hashicorp/consul/aws" }`
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	res, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	if len(res) != 0 {
+		t.Errorf("expected no resources for a registry-only config, got %+v", res)
+	}
+	// Exactly one diagnostic: the existing "non-local module source"
+	// warning. No "could not load" warning, because LoadRecursive
+	// must short-circuit before the walker runs.
+	if len(diags) != 1 {
+		t.Fatalf("expected exactly 1 diagnostic, got %d: %v", len(diags), diags)
+	}
+	if diags[0].Summary != "non-local module source" {
+		t.Errorf("diagnostic = %q, want %q", diags[0].Summary, "non-local module source")
+	}
+}
+
+// TestLoadRecursive_Cycle proves the cycle-detection contract: a
+// module that recurses into a directory currently up the call stack
+// must produce a "module recursion cycle" warning rather than
+// recursing indefinitely. The configuration loads as if the cycle
+// edge had been pruned.
+//
+// We construct the cycle as root → a → root via a "../" back-reference
+// because classifySource treats source = "." as SourceUnknown
+// (only "./" and "../" prefixes count as local), so a self-cycle
+// expressed as `source = "."` would be pruned at the SourceKind gate
+// before the cycle detector ever ran.
+func TestLoadRecursive_Cycle(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`module "a" { source = "./a" }`), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	aDir := filepath.Join(dir, "a")
+	if err := os.MkdirAll(aDir, 0o755); err != nil {
+		t.Fatalf("mkdir a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(aDir, "main.tf"), []byte(`module "back" { source = "../" }`), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	_, _, diags, err := LoadRecursive(dir)
+	if err != nil {
+		t.Fatalf("LoadRecursive: %v", err)
+	}
+	found := false
+	for _, d := range diags {
+		if d.Summary == "module recursion cycle" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cycle warning, got %v", diags)
+	}
+}

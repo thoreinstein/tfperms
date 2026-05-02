@@ -199,10 +199,21 @@ func runGoldenScenario(t *testing.T, scenarioDir string) {
 //
 // All paths and path-bearing strings (walker error message, parse error
 // message, diagnostic Subject filenames, Resource.File) are relativised
-// against the scenario directory. We feed FindTerraformFiles an
-// absolute path so every downstream string is also absolute and can be
-// stripped uniformly — relative-path inputs would split the
-// relativisation into two cases.
+// against the scenario directory. The harness invokes LoadRecursive so
+// every scenario also exercises the recursive local-module expansion
+// path; flat scenarios with no module blocks are handled identically
+// to plain Parse because LoadRecursive falls through to Parse on the
+// root directory.
+//
+// LoadRecursive's failure modes map onto the same fields as Parse's:
+//   - root walker error (missing dir, no .tf files) → WalkerError. We
+//     surface this via a pre-flight FindTerraformFiles call so empty-
+//     dir scenarios continue to render their walker error verbatim
+//     rather than going through LoadRecursive's wrapping.
+//   - root parse error → ParseError. Child-module parse errors are
+//     reported as warning diagnostics by LoadRecursive and surface
+//     under Diagnostics, so a malformed nested module does not abort
+//     the scenario.
 func buildGoldenDoc(t *testing.T, scenarioDir string) goldenDoc {
 	t.Helper()
 	doc := goldenDoc{
@@ -215,15 +226,20 @@ func buildGoldenDoc(t *testing.T, scenarioDir string) goldenDoc {
 		t.Fatalf("abs %q: %v", scenarioDir, err)
 	}
 
-	files, walkerErr := FindTerraformFiles(absDir)
-	if walkerErr != nil {
+	// Pre-flight the walker so the WalkerError field carries the same
+	// "no .tf files" / missing-dir message it did under plain Parse.
+	// LoadRecursive bubbles a root-level walker failure as its error
+	// return, but the harness's existing contract distinguishes
+	// walker errors from parse errors and we want to preserve that
+	// distinction in the goldens.
+	if _, walkerErr := FindTerraformFiles(absDir); walkerErr != nil {
 		doc.WalkerError = relativise(walkerErr.Error(), absDir)
 		return doc
 	}
 
-	resources, modules, diags, parseErr := Parse(files)
-	if parseErr != nil {
-		doc.ParseError = relativise(parseErr.Error(), absDir)
+	resources, modules, diags, loadErr := LoadRecursive(absDir)
+	if loadErr != nil {
+		doc.ParseError = relativise(loadErr.Error(), absDir)
 		return doc
 	}
 
