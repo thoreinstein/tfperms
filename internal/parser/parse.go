@@ -116,8 +116,12 @@ func classifySource(source string) string {
 		return SourceLocal
 	}
 	// Git check comes before archive/http because git sources can use
-	// https:// prefixes.
-	if strings.HasPrefix(source, "git::") || strings.HasPrefix(source, "git@") || strings.Contains(source, ".git") {
+	// https:// prefixes. Detection is boundary-aware: a bare ".git"
+	// substring would also match hostnames like
+	// "registry.gitlab.example.com", so we only treat ".git" as a git
+	// signal when it terminates the path component (suffix, "/", "?",
+	// or "#") — the standard Terraform / go-getter conventions.
+	if isGitSource(source) {
 		return SourceGit
 	}
 	if strings.HasSuffix(source, ".zip") || strings.HasSuffix(source, ".tar.gz") || strings.HasSuffix(source, ".tar") ||
@@ -138,6 +142,36 @@ func classifySource(source string) string {
 		}
 	}
 	return SourceUnknown
+}
+
+// isGitSource reports whether source matches one of the recognised git
+// module-source forms:
+//   - "git::<url>"            (explicit forced-getter prefix)
+//   - "git@host:path"         (SSH shorthand)
+//   - "<...>.git"             (trailing repo suffix)
+//   - "<...>.git/<subdir>"    (go-getter "//" subdir, splits to ".git/")
+//   - "<...>.git?<query>"     (go-getter ?ref= etc.)
+//   - "<...>.git#<fragment>"  (rare, but symmetric with "?")
+//
+// A bare strings.Contains(source, ".git") would misfire on hostnames like
+// "registry.gitlab.example.com" or "app.gitsomething.io" — those segments
+// embed ".git" but the next character is a letter, not a path boundary.
+// Restricting matches to component boundaries keeps that class of
+// host-qualified registry source classified as SourceRegistry rather than
+// SourceGit.
+func isGitSource(source string) bool {
+	if strings.HasPrefix(source, "git::") || strings.HasPrefix(source, "git@") {
+		return true
+	}
+	if strings.HasSuffix(source, ".git") {
+		return true
+	}
+	for _, boundary := range []string{".git/", ".git?", ".git#"} {
+		if strings.Contains(source, boundary) {
+			return true
+		}
+	}
+	return false
 }
 
 // topLevelSchema enumerates the top-level blocks Parse extracts. Anything
