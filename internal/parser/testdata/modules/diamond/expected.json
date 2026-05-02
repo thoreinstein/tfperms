@@ -1,0 +1,72 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "shared_bucket",
+      "file": "mod-c/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "diamond-shared"
+        }
+      ],
+      "module_path": [
+        "a",
+        "shared"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "shared_bucket",
+      "file": "mod-c/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "diamond-shared"
+        }
+      ],
+      "module_path": [
+        "b",
+        "shared"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "a",
+      "source": "./mod-a",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": []
+    },
+    {
+      "name": "b",
+      "source": "./mod-b",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 5,
+      "args": []
+    },
+    {
+      "name": "shared",
+      "source": "../mod-c",
+      "source_kind": "local",
+      "file": "mod-a/main.tf",
+      "line": 1,
+      "args": []
+    },
+    {
+      "name": "shared",
+      "source": "../mod-c",
+      "source_kind": "local",
+      "file": "mod-b/main.tf",
+      "line": 1,
+      "args": []
+    }
+  ]
+}
