@@ -170,13 +170,25 @@ func Parse(files []string) ([]Resource, hcl.Diagnostics, error) {
 		// The schema declares two labels for both registered block types,
 		// so HCL guarantees Labels has length 2 by the time we get here;
 		// no bounds check is needed.
+		meta, metaDiags := evalMetaArgs(blk, evalCtx)
+		// Diagnostics are surfaced regardless of keep/drop. In practice
+		// evalMetaArgs only produces warnings on the keep path (a clean
+		// `count = 0` is an answer, not an unknown), but appending
+		// unconditionally keeps the call site honest if that contract
+		// changes.
+		evalDiags = append(evalDiags, metaDiags...)
+		if !meta.keep {
+			continue
+		}
 		out = append(out, Resource{
-			Kind:  blk.Type,
-			Type:  blk.Labels[0],
-			Name:  blk.Labels[1],
-			File:  blk.DefRange.Filename,
-			Line:  blk.DefRange.Start.Line,
-			Attrs: extractAttrs(blk, evalCtx),
+			Kind:           blk.Type,
+			Type:           blk.Labels[0],
+			Name:           blk.Labels[1],
+			File:           blk.DefRange.Filename,
+			Line:           blk.DefRange.Start.Line,
+			Attrs:          extractAttrs(blk, evalCtx),
+			DynamicBlocks:  meta.dynamicLabels,
+			PreventDestroy: meta.preventDestroy,
 		})
 	}
 
