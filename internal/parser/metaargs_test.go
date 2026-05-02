@@ -111,6 +111,13 @@ func TestEvalMetaArgs_Count(t *testing.T) {
 			wantKeep: true,
 			wantWarn: false,
 		},
+		{
+			name:     "count_zero_negative_drops",
+			src:      `resource "x" "y" { count = -1 }`,
+			ctx:      emptyCtx(),
+			wantKeep: false,
+			wantWarn: false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -137,6 +144,134 @@ func TestEvalMetaArgs_Count(t *testing.T) {
 				// Subject must point at the count expression's range.
 				if diags[0].Subject == nil {
 					t.Errorf("diag Subject must be non-nil for unresolved count")
+				}
+			}
+		})
+	}
+}
+
+// TestEvalMetaArgs_ForEach covers the for_each acceptance criteria:
+// empty map/list/set/tuple drop; non-empty keep; unresolved or
+// non-collection expressions warn.
+func TestEvalMetaArgs_ForEach(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		ctx      *hcl.EvalContext
+		wantKeep bool
+		wantWarn bool
+	}{
+		{
+			name:     "foreach_empty_object_literal",
+			src:      `resource "x" "y" { for_each = {} }`,
+			ctx:      emptyCtx(),
+			wantKeep: false,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_empty_tuple_literal",
+			src:      `resource "x" "y" { for_each = [] }`,
+			ctx:      emptyCtx(),
+			wantKeep: false,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_nonempty_object",
+			src:      `resource "x" "y" { for_each = { a = "x" } }`,
+			ctx:      emptyCtx(),
+			wantKeep: true,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_nonempty_tuple",
+			src:      `resource "x" "y" { for_each = ["a"] }`,
+			ctx:      emptyCtx(),
+			wantKeep: true,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_via_var_empty_map",
+			src:      `resource "x" "y" { for_each = var.empty_map }`,
+			ctx:      metaCtxResolved(),
+			wantKeep: false,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_via_var_empty_list",
+			src:      `resource "x" "y" { for_each = var.empty_list }`,
+			ctx:      metaCtxResolved(),
+			wantKeep: false,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_via_var_nonempty_map",
+			src:      `resource "x" "y" { for_each = var.nonempty_map }`,
+			ctx:      metaCtxResolved(),
+			wantKeep: true,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_via_var_nonempty_list",
+			src:      `resource "x" "y" { for_each = var.nonempty_lst }`,
+			ctx:      metaCtxResolved(),
+			wantKeep: true,
+			wantWarn: false,
+		},
+		{
+			name:     "foreach_unresolved_warns",
+			src:      `resource "x" "y" { for_each = var.unknown }`,
+			ctx:      emptyCtx(),
+			wantKeep: true,
+			wantWarn: true,
+		},
+		{
+			name: "foreach_toset_unresolved_warns",
+			// toset is a Terraform function; emptyCtx has no functions
+			// registered, so this expression cannot be resolved here.
+			// Per the spec's best-effort stance we keep + warn.
+			src:      `resource "x" "y" { for_each = toset([]) }`,
+			ctx:      emptyCtx(),
+			wantKeep: true,
+			wantWarn: true,
+		},
+		{
+			name:     "foreach_non_collection_warns",
+			src:      `resource "x" "y" { for_each = "not a collection" }`,
+			ctx:      emptyCtx(),
+			wantKeep: true,
+			wantWarn: true,
+		},
+		{
+			name:     "no_foreach_attribute_keeps",
+			src:      `resource "x" "y" { bucket = "foo" }`,
+			ctx:      emptyCtx(),
+			wantKeep: true,
+			wantWarn: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			blk := parseBlock(t, tc.src)
+			res, diags := evalMetaArgs(blk, tc.ctx)
+			if res.keep != tc.wantKeep {
+				t.Errorf("keep = %v, want %v", res.keep, tc.wantKeep)
+			}
+			gotWarn := false
+			for _, d := range diags {
+				if d.Severity == hcl.DiagWarning && d.Summary == "unresolved conditional" {
+					gotWarn = true
+				}
+			}
+			if gotWarn != tc.wantWarn {
+				t.Errorf("warn = %v, want %v (diags=%v)", gotWarn, tc.wantWarn, diags)
+			}
+			if tc.wantWarn {
+				if !strings.Contains(diags[0].Detail, "for_each") {
+					t.Errorf("diag Detail %q must mention 'for_each'", diags[0].Detail)
+				}
+				if diags[0].Subject == nil {
+					t.Errorf("diag Subject must be non-nil for unresolved for_each")
 				}
 			}
 		})

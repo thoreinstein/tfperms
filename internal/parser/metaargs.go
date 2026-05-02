@@ -98,6 +98,14 @@ func evalMetaArgs(blk *hcl.Block, evalCtx *hcl.EvalContext) (metaResult, hcl.Dia
 		diags = append(diags, d...)
 	}
 
+	if attr, ok := body.Attributes["for_each"]; ok {
+		keep, d := evalForEach(blk, attr, evalCtx)
+		if !keep {
+			res.keep = false
+		}
+		diags = append(diags, d...)
+	}
+
 	return res, diags
 }
 
@@ -131,6 +139,55 @@ func evalCount(blk *hcl.Block, attr *hclsyntax.Attribute, evalCtx *hcl.EvalConte
 		return false, nil
 	}
 	return true, nil
+}
+
+// evalForEach evaluates a `for_each` attribute. Returns (keep, diags):
+//
+//   - keep=false iff the expression resolves to a known empty
+//     collection: an empty map, list, set, tuple, or object. We treat
+//     all five as equivalent because Terraform itself does (each
+//     surfaces zero instances).
+//   - keep=true otherwise. A resolved non-empty collection keeps
+//     without warning; an unresolved expression or a known
+//     non-collection value keeps with an "unresolved conditional"
+//     warning. `for_each = toset([...])` is in practice unresolved at
+//     this stage because the eval context has no functions registered,
+//     so it routes through the warning path — that matches the spec's
+//     "best effort" stance.
+func evalForEach(blk *hcl.Block, attr *hclsyntax.Attribute, evalCtx *hcl.EvalContext) (bool, hcl.Diagnostics) {
+	val, valDiags := attr.Expr.Value(evalCtx)
+	if valDiags.HasErrors() || !val.IsKnown() || val.IsNull() {
+		return true, hcl.Diagnostics{unresolvedConditional(blk, "for_each", attr.Expr.Range())}
+	}
+	empty, ok := isEmptyForEach(val)
+	if !ok {
+		// Not a collection or object — Terraform errors here; we warn.
+		return true, hcl.Diagnostics{unresolvedConditional(blk, "for_each", attr.Expr.Range())}
+	}
+	if empty {
+		return false, nil
+	}
+	return true, nil
+}
+
+// isEmptyForEach reports whether v is an empty for_each value. The
+// second return is false when v is not a valid for_each shape at all
+// (e.g. a string or number) — callers treat that as "warn".
+//
+// Object types must be branched on before calling LengthInt: cty
+// panics if asked for the length of an object value. Collection types
+// (map/list/set/tuple) all support LengthInt safely. Tuples cover the
+// `[]` literal, which parses as an empty tuple rather than a list.
+func isEmptyForEach(v cty.Value) (empty, ok bool) {
+	t := v.Type()
+	switch {
+	case t.IsObjectType():
+		return len(t.AttributeTypes()) == 0, true
+	case t.IsMapType(), t.IsListType(), t.IsSetType(), t.IsTupleType():
+		return v.LengthInt() == 0, true
+	default:
+		return false, false
+	}
 }
 
 // unresolvedConditional builds a warning-severity diagnostic for a
