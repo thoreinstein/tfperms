@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -70,6 +71,57 @@ type Resource struct {
 	PreventDestroy bool
 }
 
+// ModuleCall is a single module block extracted from a Terraform configuration.
+//
+// Field contracts:
+//   - Name is the local HCL name of the module, e.g. "foo" in `module "foo"`.
+//   - Source is the literal value of the `source` attribute.
+//   - SourceKind is the classified type of the source: "local", "registry",
+//     "git", "archive", or "unknown".
+//   - Args contains the arguments passed to the module. Expressions that
+//     cannot be resolved statically result in cty.NilVal.
+//   - File is the source file path.
+//   - Line is the line number where the `module` block begins.
+type ModuleCall struct {
+	Name       string
+	Source     string
+	SourceKind string
+	Args       map[string]cty.Value
+	File       string
+	Line       int
+}
+
+const (
+	SourceLocal    = "local"
+	SourceRegistry = "registry"
+	SourceGit      = "git"
+	SourceArchive  = "archive"
+	SourceUnknown  = "unknown"
+)
+
+// classifySource determines the SourceKind from the source string based on
+// standard Terraform module source patterns.
+func classifySource(source string) string {
+	if strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
+		return SourceLocal
+	}
+	// Git check comes before archive/http because git sources can use
+	// https:// prefixes.
+	if strings.HasPrefix(source, "git::") || strings.HasPrefix(source, "git@") || strings.Contains(source, ".git") {
+		return SourceGit
+	}
+	if strings.HasSuffix(source, ".zip") || strings.HasSuffix(source, ".tar.gz") || strings.HasSuffix(source, ".tar") ||
+		strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		return SourceArchive
+	}
+	// Registry sources match the namespace/name/provider triplet pattern.
+	parts := strings.Split(source, "/")
+	if len(parts) == 3 {
+		return SourceRegistry
+	}
+	return SourceUnknown
+}
+
 // topLevelSchema enumerates the top-level blocks Parse extracts. Anything
 // not listed here falls through PartialContent's "remaining body" silently
 // — that is how provider/terraform/output/variable/locals/module/check/
@@ -91,18 +143,21 @@ var topLevelSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{
 		{Type: "resource", LabelNames: []string{"type", "name"}},
 		{Type: "data", LabelNames: []string{"type", "name"}},
+		{Type: "module", LabelNames: []string{"name"}},
 	},
 }
 
 // Parse reads each file, merges them into a single configuration, and
-// returns its `resource` and `data` blocks as Resource values sorted by
-// (File, Line). Other top-level block types are silently skipped (see
-// topLevelSchema for the rationale).
+// returns its `resource`, `data`, and `module` blocks as structured values
+// sorted by (File, Line). Other top-level block types are silently skipped
+// (see topLevelSchema for the rationale).
 //
 // Returns:
 //   - The Resource slice (sorted, deterministic).
+//   - The ModuleCall slice (sorted, deterministic).
 //   - hcl.Diagnostics carrying warning-severity entries only — currently
-//     used by buildEvalContext to surface locals dependency cycles.
+//     used by buildEvalContext to surface locals dependency cycles and by
+//     extractModule to warn about non-local module sources.
 //     Callers may log/format these but Parse itself never escalates a
 //     warning to an error. The slice is nil when there is nothing to
 //     report.
@@ -118,23 +173,23 @@ var topLevelSchema = &hcl.BodySchema{
 //     message stays single-line — Detail tends to span multiple lines and
 //     "must not leak through" per the parser error contract.
 //
-// The empty-input case (nil or empty slice) returns (nil, nil, nil)
+// The empty-input case (nil or empty slice) returns (nil, nil, nil, nil)
 // without touching the filesystem; the walker errors out earlier when a
 // directory has no .tf files, so this code path is mostly defensive.
-func Parse(files []string) ([]Resource, hcl.Diagnostics, error) {
+func Parse(files []string) ([]Resource, []ModuleCall, hcl.Diagnostics, error) {
 	if len(files) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	parsed := make([]*hcl.File, 0, len(files))
 	for _, path := range files {
 		src, err := os.ReadFile(path)
 		if err != nil {
-			return nil, nil, fmt.Errorf("read %q: %w", path, err)
+			return nil, nil, nil, fmt.Errorf("read %q: %w", path, err)
 		}
 		f, diags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
-			return nil, nil, formatDiag(diags)
+			return nil, nil, nil, formatDiag(diags)
 		}
 		parsed = append(parsed, f)
 	}
@@ -162,11 +217,19 @@ func Parse(files []string) ([]Resource, hcl.Diagnostics, error) {
 	// warnings — those would have come from Content.
 	content, _, diags := mergedBody.PartialContent(topLevelSchema)
 	if diags.HasErrors() {
-		return nil, nil, formatDiag(diags)
+		return nil, nil, nil, formatDiag(diags)
 	}
 
-	out := make([]Resource, 0, len(content.Blocks))
+	resources := make([]Resource, 0, len(content.Blocks))
+	modules := make([]ModuleCall, 0)
 	for _, blk := range content.Blocks {
+		if blk.Type == "module" {
+			m, mDiags := extractModule(blk, evalCtx)
+			evalDiags = append(evalDiags, mDiags...)
+			modules = append(modules, m)
+			continue
+		}
+
 		// The schema declares two labels for both registered block types,
 		// so HCL guarantees Labels has length 2 by the time we get here;
 		// no bounds check is needed.
@@ -180,7 +243,7 @@ func Parse(files []string) ([]Resource, hcl.Diagnostics, error) {
 		if !meta.keep {
 			continue
 		}
-		out = append(out, Resource{
+		resources = append(resources, Resource{
 			Kind:           blk.Type,
 			Type:           blk.Labels[0],
 			Name:           blk.Labels[1],
@@ -197,14 +260,56 @@ func Parse(files []string) ([]Resource, hcl.Diagnostics, error) {
 	// file HCL preserves source order; this comparator preserves that
 	// (Line is monotonically increasing for blocks in one file) and only
 	// reorders across files.
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].File != out[j].File {
-			return out[i].File < out[j].File
+	sort.SliceStable(resources, func(i, j int) bool {
+		if resources[i].File != resources[j].File {
+			return resources[i].File < resources[j].File
 		}
-		return out[i].Line < out[j].Line
+		return resources[i].Line < resources[j].Line
 	})
 
-	return out, evalDiags, nil
+	sort.SliceStable(modules, func(i, j int) bool {
+		if modules[i].File != modules[j].File {
+			return modules[i].File < modules[j].File
+		}
+		return modules[i].Line < modules[j].Line
+	})
+
+	return resources, modules, evalDiags, nil
+}
+
+// extractModule extracts a module block into a ModuleCall.
+func extractModule(blk *hcl.Block, evalCtx *hcl.EvalContext) (ModuleCall, hcl.Diagnostics) {
+	name := blk.Labels[0]
+	attrs := extractAttrs(blk, evalCtx)
+
+	sourceVal := attrs["source"]
+	source := ""
+	if sourceVal != cty.NilVal && !sourceVal.IsNull() && sourceVal.Type().Equals(cty.String) {
+		source = sourceVal.AsString()
+	}
+	// Remove source from Args as it is already captured in its own field.
+	delete(attrs, "source")
+
+	kind := classifySource(source)
+
+	var diags hcl.Diagnostics
+	if kind != SourceLocal {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagWarning,
+			Summary:  "non-local module source",
+			Detail:   fmt.Sprintf("module %q: tfperms does not parse non-local source %q", name, source),
+			Subject:  &blk.DefRange,
+		})
+	}
+
+	return ModuleCall{
+		Name:       name,
+		Source:     source,
+		SourceKind: kind,
+		Args:       attrs,
+		File:       blk.DefRange.Filename,
+		Line:       blk.DefRange.Start.Line,
+	}, diags
 }
 
 // formatDiag flattens HCL diagnostics into a single-line

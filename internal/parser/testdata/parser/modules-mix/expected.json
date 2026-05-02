@@ -1,0 +1,97 @@
+{
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"registry\": tfperms does not parse non-local source \"hashicorp/consul/aws\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 6,
+        "col": 1
+      }
+    },
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"git\": tfperms does not parse non-local source \"git::https://example.com/repo.git\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 11,
+        "col": 1
+      }
+    },
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"http\": tfperms does not parse non-local source \"https://example.com/module.zip\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 15,
+        "col": 1
+      }
+    },
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"unknown\": tfperms does not parse non-local source \"just-a-string\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 19,
+        "col": 1
+      }
+    }
+  ],
+  "resources": [],
+  "modules": [
+    {
+      "name": "local",
+      "source": "./child",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": [
+        {
+          "name": "env",
+          "value": "prod"
+        }
+      ]
+    },
+    {
+      "name": "registry",
+      "source": "hashicorp/consul/aws",
+      "source_kind": "registry",
+      "file": "main.tf",
+      "line": 6,
+      "args": [
+        {
+          "name": "version",
+          "value": "0.1.0"
+        }
+      ]
+    },
+    {
+      "name": "git",
+      "source": "git::https://example.com/repo.git",
+      "source_kind": "git",
+      "file": "main.tf",
+      "line": 11,
+      "args": []
+    },
+    {
+      "name": "http",
+      "source": "https://example.com/module.zip",
+      "source_kind": "archive",
+      "file": "main.tf",
+      "line": 15,
+      "args": []
+    },
+    {
+      "name": "unknown",
+      "source": "just-a-string",
+      "source_kind": "unknown",
+      "file": "main.tf",
+      "line": 19,
+      "args": []
+    }
+  ]
+}

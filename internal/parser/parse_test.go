@@ -56,7 +56,7 @@ func keysOf(rs []Resource) []resKey {
 // on this so it can call Parse unconditionally.
 func TestParse_Empty(t *testing.T) {
 	for _, in := range [][]string{nil, {}} {
-		got, diags, err := Parse(in)
+		got, _, diags, err := Parse(in)
 		if err != nil {
 			t.Errorf("Parse(%v) error: %v", in, err)
 		}
@@ -204,7 +204,7 @@ func TestParse(t *testing.T) {
 			dir := t.TempDir()
 			paths := writeFiles(t, dir, tc.files, tc.order)
 
-			got, diags, err := Parse(paths)
+			got, _, diags, err := Parse(paths)
 
 			if tc.wantErr {
 				if err == nil {
@@ -272,7 +272,7 @@ func TestParse_FileLineMetadata(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, diags, err := Parse([]string{full})
+	got, _, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestParse_AttrsPopulated(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, diags, err := Parse([]string{full})
+	got, _, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -351,12 +351,12 @@ func TestParse_DeterministicAcrossRuns(t *testing.T) {
 	}
 	paths := writeFiles(t, dir, files, []string{"z.tf", "m.tf", "a.tf"})
 
-	first, _, err := Parse(paths)
+	first, _, _, err := Parse(paths)
 	if err != nil {
 		t.Fatalf("first Parse: %v", err)
 	}
 	for i := 0; i < 20; i++ {
-		got, _, err := Parse(paths)
+		got, _, _, err := Parse(paths)
 		if err != nil {
 			t.Fatalf("iter %d: %v", i, err)
 		}
@@ -387,7 +387,7 @@ func TestParse_VarLocalReferencesResolve(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, diags, err := Parse([]string{full})
+	got, _, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestParse_DropsCountZero(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, diags, err := Parse([]string{full})
+	got, _, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestParse_UnresolvedCountWarns(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, diags, err := Parse([]string{full})
+	got, _, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestParse_DynamicAndPreventDestroy(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, _, err := Parse([]string{full})
+	got, _, _, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestParse_CycleEmitsWarning(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	got, diags, err := Parse([]string{full})
+	got, _, diags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestParse_MetaArgWarningsDeterministic(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	_, firstDiags, err := Parse([]string{full})
+	_, _, firstDiags, err := Parse([]string{full})
 	if err != nil {
 		t.Fatalf("first Parse: %v", err)
 	}
@@ -578,7 +578,7 @@ func TestParse_MetaArgWarningsDeterministic(t *testing.T) {
 		t.Fatalf("expected diagnostics, got empty summary (%d diags)", len(firstDiags))
 	}
 	for i := 0; i < 20; i++ {
-		_, diags, err := Parse([]string{full})
+		_, _, diags, err := Parse([]string{full})
 		if err != nil {
 			t.Fatalf("iter %d: %v", i, err)
 		}
@@ -615,4 +615,69 @@ func equalResKeys(a, b []resKey) bool {
 		}
 	}
 	return true
+}
+
+// TestParse_Modules proves the Parse → extractModule wire-up: a module
+// block with local and non-local sources must produce ModuleCall values
+// with correctly classified SourceKind and Args.
+func TestParse_Modules(t *testing.T) {
+	dir := t.TempDir()
+	src := `
+module "local" {
+  source = "./mod"
+  input  = "foo"
+}
+module "registry" {
+  source = "hashicorp/consul/aws"
+}
+`
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	_, modules, diags, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if len(modules) != 2 {
+		t.Fatalf("got %d modules, want 2: %+v", len(modules), modules)
+	}
+
+	// First module: local
+	m1 := modules[0]
+	if m1.Name != "local" {
+		t.Errorf("modules[0].Name = %q, want \"local\"", m1.Name)
+	}
+	if m1.Source != "./mod" {
+		t.Errorf("modules[0].Source = %q, want \"./mod\"", m1.Source)
+	}
+	if m1.SourceKind != SourceLocal {
+		t.Errorf("modules[0].SourceKind = %q, want %q", m1.SourceKind, SourceLocal)
+	}
+	if want := cty.StringVal("foo"); !m1.Args["input"].Equals(want).True() {
+		t.Errorf("modules[0].Args[input] = %#v, want %#v", m1.Args["input"], want)
+	}
+
+	// Second module: registry
+	m2 := modules[1]
+	if m2.Name != "registry" {
+		t.Errorf("modules[1].Name = %q, want \"registry\"", m2.Name)
+	}
+	if m2.SourceKind != SourceRegistry {
+		t.Errorf("modules[1].SourceKind = %q, want %q", m2.SourceKind, SourceRegistry)
+	}
+
+	// Registry module should have triggered a warning diagnostic
+	found := false
+	for _, d := range diags {
+		if d.Severity == hcl.DiagWarning && strings.Contains(d.Summary, "non-local module source") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning for non-local module source, got none in %v", diags)
+	}
 }
