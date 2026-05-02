@@ -30,6 +30,7 @@ package parser
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -136,12 +137,12 @@ func buildEvalContext(files []*hcl.File) (*hcl.EvalContext, hcl.Diagnostics) {
 		}
 	}
 
-	// Anything still in `unresolved` is either part of a cycle (flagged
-	// by phase 3) or depends on something outside our reach (a function
-	// call, an undefined var, a cross-resource reference). Both cases
-	// are silently absent from the context for now.
-	_ = unresolved
-	return ctx, nil
+	// Anything still in `unresolved` is either part of a cycle or
+	// depends on something outside our reach (a function call, an
+	// undefined var, a cross-resource reference). Cycle detection only
+	// flags the former; the latter are silently absent.
+	diags := findCycleDiagnostics(unresolved, localDecls)
+	return ctx, diags
 }
 
 // collectDecls walks every parsed file's *hclsyntax.Body and extracts
@@ -206,4 +207,208 @@ func collectDecls(files []*hcl.File) (map[string]hcl.Expression, map[string]loca
 	}
 
 	return varExprs, localDecls
+}
+
+// findCycleDiagnostics inspects the set of unresolved locals and
+// returns one warning per dependency cycle in the local→local subgraph.
+//
+// Locals whose only unresolved dependencies are non-local (a missing
+// `var.X`, a function call, a reference to a cross-resource value) are
+// not part of any cycle and produce no diagnostic. That is deliberate:
+// the contract for buildEvalContext is to flag only true cycles. As a
+// concrete consequence, `local.x = upper(var.region)` with `var.region`
+// missing will sit unresolved at fixed-point but emit no warning,
+// because its only unresolved dependency is `var.region`, not another
+// local.
+//
+// Cycles are detected via iterative Tarjan SCC on the subgraph induced
+// by unresolved locals. A cycle is any SCC of size ≥ 2, or a single-
+// node SCC that contains a self-loop (`local.a = local.a`). Members of
+// each cycle are sorted alphabetically; cycles themselves are sorted by
+// their first member, so the warning order is deterministic across runs.
+func findCycleDiagnostics(unresolved map[string]hcl.Expression, decls map[string]localDecl) hcl.Diagnostics {
+	if len(unresolved) == 0 {
+		return nil
+	}
+
+	// adj[A] = sorted list of B such that A's expression contains a
+	// `local.B` traversal AND B is also unresolved. Sorted purely for
+	// determinism of the Tarjan traversal.
+	adj := make(map[string][]string, len(unresolved))
+	selfLoop := make(map[string]bool)
+	for name, expr := range unresolved {
+		seen := make(map[string]struct{})
+		for _, trav := range expr.Variables() {
+			// A traversal with only one step (`local`) is malformed
+			// Terraform — defensive skip rather than panicking on the
+			// step-1 type assertion below.
+			if len(trav) < 2 {
+				continue
+			}
+			root, ok := trav[0].(hcl.TraverseRoot)
+			if !ok || root.Name != "local" {
+				continue
+			}
+			attr, ok := trav[1].(hcl.TraverseAttr)
+			if !ok {
+				continue
+			}
+			if _, isUnresolved := unresolved[attr.Name]; !isUnresolved {
+				continue
+			}
+			if attr.Name == name {
+				selfLoop[name] = true
+				continue
+			}
+			seen[attr.Name] = struct{}{}
+		}
+		deps := make([]string, 0, len(seen))
+		for d := range seen {
+			deps = append(deps, d)
+		}
+		sort.Strings(deps)
+		adj[name] = deps
+	}
+
+	// Iterate Tarjan over node names in alphabetical order so SCC
+	// discovery is deterministic.
+	nodes := make([]string, 0, len(unresolved))
+	for n := range unresolved {
+		nodes = append(nodes, n)
+	}
+	sort.Strings(nodes)
+
+	sccs := tarjanSCC(nodes, adj)
+
+	cycles := make([][]string, 0)
+	for _, scc := range sccs {
+		if len(scc) >= 2 {
+			members := append([]string(nil), scc...)
+			sort.Strings(members)
+			cycles = append(cycles, members)
+			continue
+		}
+		// Single-node SCC: only a cycle if it has a self-loop.
+		if selfLoop[scc[0]] {
+			cycles = append(cycles, []string{scc[0]})
+		}
+	}
+	sort.Slice(cycles, func(i, j int) bool {
+		return cycles[i][0] < cycles[j][0]
+	})
+
+	if len(cycles) == 0 {
+		return nil
+	}
+
+	diags := make(hcl.Diagnostics, 0, len(cycles))
+	for _, members := range cycles {
+		var subject *hcl.Range
+		if d, ok := decls[members[0]]; ok {
+			r := d.rng
+			subject = &r
+		}
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagWarning,
+			Summary:  "locals form a dependency cycle",
+			Detail:   joinCommaSeparated(members),
+			Subject:  subject,
+		})
+	}
+	return diags
+}
+
+// joinCommaSeparated joins names with ", ". Thin wrapper over
+// strings.Join so the call sites in findCycleDiagnostics read as
+// "render the cycle members" rather than as a generic string operation.
+func joinCommaSeparated(names []string) string {
+	return strings.Join(names, ", ")
+}
+
+// tarjanSCC runs an iterative Tarjan strongly-connected-components
+// algorithm over the graph defined by `nodes` (in deterministic order)
+// and `adj` (each adjacency list also in deterministic order).
+//
+// Iterative — not recursive — because pathological local-graph fixtures
+// could otherwise blow the goroutine stack. Returns SCCs in discovery
+// order; caller is responsible for any further sorting.
+func tarjanSCC(nodes []string, adj map[string][]string) [][]string {
+	index := 0
+	indices := make(map[string]int, len(nodes))
+	lowlink := make(map[string]int, len(nodes))
+	onStack := make(map[string]bool, len(nodes))
+	stack := make([]string, 0, len(nodes))
+	var sccs [][]string
+
+	// frame represents one node's traversal state on the explicit DFS
+	// stack: which adjacency-list index we are about to recurse into.
+	type frame struct {
+		node string
+		i    int
+	}
+
+	for _, root := range nodes {
+		if _, visited := indices[root]; visited {
+			continue
+		}
+
+		dfs := []frame{{node: root, i: 0}}
+		indices[root] = index
+		lowlink[root] = index
+		index++
+		stack = append(stack, root)
+		onStack[root] = true
+
+		for len(dfs) > 0 {
+			top := &dfs[len(dfs)-1]
+			neighbors := adj[top.node]
+			if top.i < len(neighbors) {
+				w := neighbors[top.i]
+				top.i++
+				if _, seen := indices[w]; !seen {
+					indices[w] = index
+					lowlink[w] = index
+					index++
+					stack = append(stack, w)
+					onStack[w] = true
+					dfs = append(dfs, frame{node: w, i: 0})
+					continue
+				}
+				if onStack[w] {
+					if indices[w] < lowlink[top.node] {
+						lowlink[top.node] = indices[w]
+					}
+				}
+				continue
+			}
+
+			// Finished exploring all neighbors. If this is an SCC root,
+			// pop one component.
+			if lowlink[top.node] == indices[top.node] {
+				var comp []string
+				for {
+					n := stack[len(stack)-1]
+					stack = stack[:len(stack)-1]
+					onStack[n] = false
+					comp = append(comp, n)
+					if n == top.node {
+						break
+					}
+				}
+				sccs = append(sccs, comp)
+			}
+
+			// Pop this frame and propagate lowlink to parent.
+			finished := top.node
+			dfs = dfs[:len(dfs)-1]
+			if len(dfs) > 0 {
+				parent := &dfs[len(dfs)-1]
+				if lowlink[finished] < lowlink[parent.node] {
+					lowlink[parent.node] = lowlink[finished]
+				}
+			}
+		}
+	}
+
+	return sccs
 }
