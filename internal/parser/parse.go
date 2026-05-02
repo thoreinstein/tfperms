@@ -32,10 +32,20 @@ import (
 //     (`resource "x" "y" {` on one line) this is the same line as the
 //     opening brace; for pathologically multi-line block headers it is
 //     the keyword line, not the brace line.
-//   - Attrs is always non-nil but always empty at this stage. Story .5
-//     populates it with the block's argument values; downstream code
-//     should be written to handle either an empty or a populated map so
-//     it does not need to change when .5 lands.
+//   - Attrs is always non-nil. It contains exactly one entry per
+//     top-level attribute on the block, excluding Terraform meta-
+//     arguments (provider, depends_on, count, for_each — the latter two
+//     belong to story .7's count/for_each routing). Nested blocks
+//     (lifecycle, dynamic, provisioner, ...) do not contribute keys.
+//     Each value is either a fully-resolved cty.Value (literals;
+//     var.X / local.X resolved through the eval context) or cty.NilVal
+//     when the right-hand side could not be evaluated at this stage
+//     (function calls, interpolations referencing unknowns, cross-
+//     resource references, missing variables/locals). Until story .6
+//     wires a populated *hcl.EvalContext into Parse, var.X and local.X
+//     references resolve to cty.NilVal end-to-end; literal-only blocks
+//     are unaffected. Callers that need richer resolution should treat
+//     cty.NilVal as "deferred / unknown" rather than "absent".
 type Resource struct {
 	Kind  string
 	Type  string
@@ -125,6 +135,14 @@ func Parse(files []string) ([]Resource, error) {
 		return nil, formatDiag(diags)
 	}
 
+	// evalCtx is the context attribute resolution evaluates against. Story
+	// .5 deliberately leaves Variables empty: literals resolve fine
+	// without it, and var.X / local.X collapse to cty.NilVal — exactly
+	// the lazy-resolution contract documented on Resource.Attrs. Story .6
+	// will populate Variables (and possibly Functions) here without any
+	// further surgery to extractAttrs.
+	evalCtx := &hcl.EvalContext{Variables: map[string]cty.Value{}}
+
 	out := make([]Resource, 0, len(content.Blocks))
 	for _, blk := range content.Blocks {
 		// The schema declares two labels for both registered block types,
@@ -136,7 +154,7 @@ func Parse(files []string) ([]Resource, error) {
 			Name:  blk.Labels[1],
 			File:  blk.DefRange.Filename,
 			Line:  blk.DefRange.Start.Line,
-			Attrs: make(map[string]cty.Value),
+			Attrs: extractAttrs(blk, evalCtx),
 		})
 	}
 

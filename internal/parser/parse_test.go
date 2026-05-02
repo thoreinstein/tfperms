@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zclconf/go-cty/cty"
 )
 
 // writeFiles materialises a map of relative-path -> content under root and
@@ -228,15 +230,14 @@ func TestParse(t *testing.T) {
 			if !equalResKeys(gotKeys, tc.wantKeys) {
 				t.Errorf("result keys = %v, want %v (full: %+v)", gotKeys, tc.wantKeys, got)
 			}
-			// Attrs invariant: every Resource has a non-nil empty Attrs map.
-			// This is the .5 hand-off contract — story .5 will remove the
-			// "empty" half of this assertion but should keep the non-nil half.
+			// Attrs invariant: every Resource has a non-nil Attrs map.
+			// Story .5 populated this with one entry per top-level
+			// attribute (excluding meta-args); the empty-map half of the
+			// pre-.5 assertion is gone, but the non-nil half stays so a
+			// future regression that returns nil here is caught.
 			for i, r := range got {
 				if r.Attrs == nil {
 					t.Errorf("got[%d].Attrs is nil; must be non-nil even when empty", i)
-				}
-				if len(r.Attrs) != 0 {
-					t.Errorf("got[%d].Attrs has %d entries; must be empty at this stage", i, len(r.Attrs))
 				}
 			}
 		})
@@ -276,6 +277,46 @@ func TestParse_FileLineMetadata(t *testing.T) {
 		if g.Kind != w.Kind || g.Type != w.Type || g.Name != w.Name || g.File != w.File || g.Line != w.Line {
 			t.Errorf("got[%d]=%+v, want %+v", i, g, w)
 		}
+	}
+}
+
+// TestParse_AttrsPopulated proves the Parse → extractAttrs wire-up by
+// running the full Parse pipeline on a block with a couple of literal
+// attributes and asserting the resulting Resource.Attrs entries.
+//
+// Why end-to-end here when attrs_test.go already covers extractAttrs in
+// isolation: this test specifically defends the call site in parse.go.
+// A regression that drops the extractAttrs call (e.g. reverting to
+// `make(map[string]cty.Value)`) keeps every attrs_test.go row passing
+// but breaks production behaviour. Only literal attributes are used so
+// the assertion does not couple to story .6's eval-context wiring.
+func TestParse_AttrsPopulated(t *testing.T) {
+	dir := t.TempDir()
+	src := `resource "google_storage_bucket" "b" {
+  bucket  = "my-bucket"
+  enabled = true
+}`
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(got), got)
+	}
+	r := got[0]
+	if want := cty.StringVal("my-bucket"); !r.Attrs["bucket"].Equals(want).True() {
+		t.Errorf("Attrs[bucket] = %#v, want %#v", r.Attrs["bucket"], want)
+	}
+	if want := cty.True; !r.Attrs["enabled"].Equals(want).True() {
+		t.Errorf("Attrs[enabled] = %#v, want %#v", r.Attrs["enabled"], want)
+	}
+	if len(r.Attrs) != 2 {
+		t.Errorf("Attrs has %d entries (%v), want 2", len(r.Attrs), r.Attrs)
 	}
 }
 
