@@ -1,0 +1,64 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "deep",
+      "file": "p/leaf/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "deep-bucket"
+        }
+      ],
+      "module_path": [
+        "p1",
+        "leaf"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "deep",
+      "file": "p/leaf/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "deep-bucket"
+        }
+      ],
+      "module_path": [
+        "p2",
+        "leaf"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "p1",
+      "source": "./p",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": []
+    },
+    {
+      "name": "p2",
+      "source": "./p",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 5,
+      "args": []
+    },
+    {
+      "name": "leaf",
+      "source": "./leaf",
+      "source_kind": "local",
+      "file": "p/main.tf",
+      "line": 1,
+      "args": []
+    }
+  ]
+}
