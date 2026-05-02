@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2"
@@ -333,6 +335,254 @@ func TestBuildEvalContext_Phase2(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildEvalContext_Phase3_Cycles covers cycle detection: each row
+// supplies a fixture whose locals form a known dependency shape and
+// asserts the warning surface (count, member sets, absence-of-resolved-
+// values) plus that unrelated locals still resolve.
+func TestBuildEvalContext_Phase3_Cycles(t *testing.T) {
+	cases := []struct {
+		name           string
+		files          map[string]string
+		order          []string
+		wantCycles     [][]string // each inner slice = sorted member names of one cycle
+		absentLoc      []string   // must be absent (cycle members + dependants thereof)
+		assertResolved map[string]cty.Value
+	}{
+		{
+			name: "two-node cycle",
+			files: map[string]string{
+				"f.tf": "" +
+					"locals {\n" +
+					"  a = local.b\n" +
+					"  b = local.a\n" +
+					"}\n",
+			},
+			order:      []string{"f.tf"},
+			wantCycles: [][]string{{"a", "b"}},
+			absentLoc:  []string{"a", "b"},
+		},
+		{
+			name: "three-node cycle",
+			files: map[string]string{
+				"f.tf": "" +
+					"locals {\n" +
+					"  a = local.b\n" +
+					"  b = local.c\n" +
+					"  c = local.a\n" +
+					"}\n",
+			},
+			order:      []string{"f.tf"},
+			wantCycles: [][]string{{"a", "b", "c"}},
+			absentLoc:  []string{"a", "b", "c"},
+		},
+		{
+			name: "self-loop",
+			files: map[string]string{
+				"f.tf": `locals { a = local.a }`,
+			},
+			order:      []string{"f.tf"},
+			wantCycles: [][]string{{"a"}},
+			absentLoc:  []string{"a"},
+		},
+		{
+			name: "cycle plus unrelated resolvable local",
+			files: map[string]string{
+				"f.tf": "" +
+					"locals {\n" +
+					"  a = local.b\n" +
+					"  b = local.a\n" +
+					"  c = \"ok\"\n" +
+					"}\n",
+			},
+			order:          []string{"f.tf"},
+			wantCycles:     [][]string{{"a", "b"}},
+			absentLoc:      []string{"a", "b"},
+			assertResolved: map[string]cty.Value{"c": cty.StringVal("ok")},
+		},
+		{
+			name: "two independent cycles produce two warnings in deterministic order",
+			files: map[string]string{
+				"f.tf": "" +
+					"locals {\n" +
+					"  a = local.b\n" +
+					"  b = local.a\n" +
+					"  c = local.d\n" +
+					"  d = local.c\n" +
+					"}\n",
+			},
+			order:      []string{"f.tf"},
+			wantCycles: [][]string{{"a", "b"}, {"c", "d"}},
+			absentLoc:  []string{"a", "b", "c", "d"},
+		},
+		{
+			name: "local depending on missing var is NOT a cycle (no warning)",
+			files: map[string]string{
+				"f.tf": `locals { x = upper(var.missing) }`,
+			},
+			order:      []string{"f.tf"},
+			wantCycles: nil,
+			absentLoc:  []string{"x"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := parseFiles(t, tc.files, tc.order)
+			ctx, diags := buildEvalContext(files)
+
+			// Warning count must match wantCycles exactly.
+			gotCycles := extractCycleMembers(diags)
+			if !equalCycleSets(gotCycles, tc.wantCycles) {
+				t.Errorf("cycle warnings = %v, want %v", gotCycles, tc.wantCycles)
+			}
+			// Every diagnostic must be warning-severity.
+			for _, d := range diags {
+				if d.Severity != hcl.DiagWarning {
+					t.Errorf("diag %q severity = %v, want DiagWarning", d.Summary, d.Severity)
+				}
+			}
+
+			for _, name := range tc.absentLoc {
+				if hasLocal(ctx, name) {
+					t.Errorf("local.%s present (=%#v); cycle members must be absent", name, localValue(ctx, name))
+				}
+			}
+			for name, want := range tc.assertResolved {
+				if !hasLocal(ctx, name) {
+					t.Errorf("local.%s missing; want %#v", name, want)
+					continue
+				}
+				if got := localValue(ctx, name); !ctyValuesEqual(got, want) {
+					t.Errorf("local.%s = %#v, want %#v", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildEvalContext_Phase3_PathologicalTermination combines literals,
+// var-refs, multiple cycles, and function calls in one fixture and runs
+// it under the package's default test timeout. The point is to confirm
+// the resolver and SCC algorithm both terminate on adversarial input.
+func TestBuildEvalContext_Phase3_PathologicalTermination(t *testing.T) {
+	files := parseFiles(t, map[string]string{
+		"big.tf": "" +
+			"variable \"region\" { default = \"us-east1\" }\n" +
+			"variable \"missing\" { type = string }\n" +
+			"locals {\n" +
+			"  literal = \"ok\"\n" +
+			"  via_var = var.region\n" +
+			"  via_chain = local.via_var\n" +
+			"  cycle_a = local.cycle_b\n" +
+			"  cycle_b = local.cycle_a\n" +
+			"  selfloop = local.selfloop\n" +
+			"  fn_call = upper(\"ABC\")\n" +
+			"  bad_var = var.missing\n" +
+			"}\n",
+	}, []string{"big.tf"})
+
+	ctx, diags := buildEvalContext(files)
+
+	// Literals + var-refs + chain must resolve.
+	for name, want := range map[string]cty.Value{
+		"literal":   cty.StringVal("ok"),
+		"via_var":   cty.StringVal("us-east1"),
+		"via_chain": cty.StringVal("us-east1"),
+	} {
+		if !hasLocal(ctx, name) {
+			t.Errorf("local.%s missing; want %#v", name, want)
+			continue
+		}
+		if got := localValue(ctx, name); !ctyValuesEqual(got, want) {
+			t.Errorf("local.%s = %#v, want %#v", name, got, want)
+		}
+	}
+
+	// Cycle members and unresolvable locals must be absent.
+	for _, name := range []string{"cycle_a", "cycle_b", "selfloop", "fn_call", "bad_var"} {
+		if hasLocal(ctx, name) {
+			t.Errorf("local.%s present; want absent", name)
+		}
+	}
+
+	// Two cycles ⇒ exactly two warnings, deterministic order.
+	want := [][]string{{"cycle_a", "cycle_b"}, {"selfloop"}}
+	got := extractCycleMembers(diags)
+	if !equalCycleSets(got, want) {
+		t.Errorf("cycle warnings = %v, want %v", got, want)
+	}
+}
+
+// TestBuildEvalContext_Phase3_DeterministicWarningText runs the same
+// cycle fixture multiple times and asserts the warning Detail strings
+// are byte-identical each time.
+func TestBuildEvalContext_Phase3_DeterministicWarningText(t *testing.T) {
+	files := parseFiles(t, map[string]string{
+		"f.tf": "" +
+			"locals {\n" +
+			"  a = local.b\n" +
+			"  b = local.a\n" +
+			"  c = local.d\n" +
+			"  d = local.c\n" +
+			"}\n",
+	}, []string{"f.tf"})
+
+	_, firstDiags := buildEvalContext(files)
+	first := summariseDiags(firstDiags)
+	for i := 0; i < 20; i++ {
+		_, diags := buildEvalContext(files)
+		got := summariseDiags(diags)
+		if got != first {
+			t.Fatalf("iter %d diag summary differs: %q vs %q", i, got, first)
+		}
+	}
+}
+
+// extractCycleMembers parses the Detail of each cycle diagnostic into a
+// sorted slice of member names. Returns one entry per diagnostic, in the
+// order diagnostics were emitted.
+func extractCycleMembers(diags hcl.Diagnostics) [][]string {
+	out := make([][]string, 0, len(diags))
+	for _, d := range diags {
+		if d.Summary != "locals form a dependency cycle" {
+			continue
+		}
+		parts := strings.Split(d.Detail, ", ")
+		out = append(out, parts)
+	}
+	return out
+}
+
+// equalCycleSets compares two slices of cycles for set-of-sets equality.
+// Inner slices are already sorted; outer slice order is treated as
+// significant because cycle warnings are emitted in deterministic order.
+func equalCycleSets(a, b [][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if len(a[i]) != len(b[i]) {
+			return false
+		}
+		for j := range a[i] {
+			if a[i][j] != b[i][j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// summariseDiags renders diags into a single string for byte-exact
+// comparison across runs. Includes Severity, Summary, and Detail.
+func summariseDiags(diags hcl.Diagnostics) string {
+	parts := make([]string, 0, len(diags))
+	for _, d := range diags {
+		parts = append(parts, fmt.Sprintf("[%d] %s | %s", d.Severity, d.Summary, d.Detail))
+	}
+	return strings.Join(parts, "\n")
 }
 
 // TestBuildEvalContext_Phase2_Deterministic mirrors the parse_test.go
