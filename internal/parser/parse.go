@@ -128,7 +128,20 @@ func classifySource(source string) string {
 		strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		return SourceArchive
 	}
-	parts := strings.Split(source, "/")
+	// Registry sources may carry go-getter modifiers — a "//<subdir>"
+	// suffix and/or a "?query"/"#fragment" — that the segment-count
+	// below would otherwise mistake for extra path components. Strip
+	// those before splitting. Order matters: this runs after the git
+	// and archive checks, so ".git//" still classifies as git and
+	// "http(s)://" still classifies as archive.
+	registrySrc := source
+	if i := strings.Index(registrySrc, "//"); i >= 0 {
+		registrySrc = registrySrc[:i]
+	}
+	if i := strings.IndexAny(registrySrc, "?#"); i >= 0 {
+		registrySrc = registrySrc[:i]
+	}
+	parts := strings.Split(registrySrc, "/")
 	switch len(parts) {
 	case 3:
 		// Public Terraform registry: namespace/name/provider.
@@ -149,7 +162,7 @@ func classifySource(source string) string {
 //   - "git::<url>"            (explicit forced-getter prefix)
 //   - "git@host:path"         (SSH shorthand)
 //   - "<...>.git"             (trailing repo suffix)
-//   - "<...>.git/<subdir>"    (go-getter "//" subdir, splits to ".git/")
+//   - "<...>.git//<subdir>"   (go-getter "//" subdir, splits to ".git/")
 //   - "<...>.git?<query>"     (go-getter ?ref= etc.)
 //   - "<...>.git#<fragment>"  (rare, but symmetric with "?")
 //
