@@ -6,8 +6,10 @@ package parser
 // module resolution, Epic 5 dedup) iterate over.
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -386,6 +388,230 @@ func extractModule(blk *hcl.Block, evalCtx *hcl.EvalContext) (ModuleCall, hcl.Di
 		File:       blk.DefRange.Filename,
 		Line:       blk.DefRange.Start.Line,
 	}, diags
+}
+
+// errModuleCycle is the sentinel returned by buildModuleTemplate when a
+// recursive module load re-enters a directory that is already being
+// expanded up the call stack. It is intercepted at the call site, where
+// it surfaces as a warning diagnostic rather than a hard failure.
+var errModuleCycle = errors.New("module recursion cycle")
+
+// moduleTemplate is the parsed-and-recursively-expanded "blueprint" of
+// a single Terraform module directory. Cached entries in LoadRecursive
+// store the result as if the module were the root config — root-level
+// resources have an empty ModulePath, resources from a nested
+// `module "x"` block carry ModulePath = ["x", ...]. Each call site
+// instantiates the template by prepending the caller's module name to
+// every resource's ModulePath.
+type moduleTemplate struct {
+	resources []Resource
+	modules   []ModuleCall
+	diags     hcl.Diagnostics
+}
+
+// LoadRecursive parses dir as a Terraform configuration, then walks
+// every `module "name" { source = "./..." }` call site whose source is
+// classified as SourceLocal, returning the flat union of every
+// resource encountered tagged with the chain of module names from the
+// root down to the resource.
+//
+// Resources are duplicated for each call site of a module: if
+// `module "x"` and `module "y"` both reference `./mod`, the resources
+// inside `./mod` appear twice in the result, once with
+// ModulePath = ["x", ...] and once with ModulePath = ["y", ...].
+//
+// Returns:
+//   - []Resource: the flattened recursive resource set described above.
+//     Order is determined by a depth-first walk: root resources first
+//     (in Parse's File:Line order), then for each local module call in
+//     source order, the recursively-loaded resources of that module.
+//   - []ModuleCall: every module block encountered during the walk,
+//     deduped by (File, Line) source position. Plain Parse already
+//     reports modules in File:Line order; recursive children are
+//     appended after their parent's modules.
+//   - hcl.Diagnostics: warning-severity entries from Parse plus
+//     warnings emitted at call sites that could not be loaded — missing
+//     directory, no .tf files, parse failure inside the child module,
+//     or a recursion cycle. Non-local module sources continue to
+//     produce the same "non-local module source" warning extractModule
+//     emits in plain Parse; LoadRecursive does not attempt to fetch
+//     them.
+//   - error: hard failure on the root directory only — a missing /
+//     unreadable root, an HCL parse error in a root file, or
+//     filepath.Abs failure on the root path. Failures inside nested
+//     modules surface as warning diagnostics so a single broken module
+//     does not abort the whole configuration.
+//
+// Local module sources are resolved relative to the file declaring the
+// `module` block (filepath.Dir(m.File) + m.Source), not the process
+// CWD or the root directory — this matches Terraform's own module
+// resolution semantics for relative sources.
+func LoadRecursive(dir string) ([]Resource, []ModuleCall, hcl.Diagnostics, error) {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("abs %q: %w", dir, err)
+	}
+	cache := map[string]*moduleTemplate{}
+	inProgress := map[string]bool{}
+	template, walkErr, parseErr := buildModuleTemplate(absDir, cache, inProgress)
+	if walkErr != nil {
+		return nil, nil, nil, walkErr
+	}
+	if parseErr != nil {
+		return nil, nil, nil, parseErr
+	}
+	return template.resources, template.modules, template.diags, nil
+}
+
+// buildModuleTemplate parses absDir, recursively expands every local
+// `module` call site, and returns a *moduleTemplate whose resources
+// carry the ModulePath chain rooted *at absDir*. Callers prepend their
+// own module name to each resource's ModulePath when instantiating the
+// returned template at a parent call site.
+//
+// The function returns three values to disambiguate the failure modes:
+//   - (template, nil, nil) — success.
+//   - (nil, walkErr, nil)  — the walker rejected absDir (missing dir,
+//     no .tf files, permission denied). Callers above the root translate
+//     this to a warning; LoadRecursive lets it bubble out as a hard error
+//     for the root.
+//   - (nil, nil, parseErr) — Parse rejected one of the .tf files inside
+//     absDir. Same treatment as walkErr at child / root levels.
+//
+// Cycle detection: re-entering a directory currently up the stack
+// returns (nil, nil, errModuleCycle). Callers translate the sentinel to
+// a warning at the offending call site rather than recursing
+// indefinitely.
+func buildModuleTemplate(absDir string, cache map[string]*moduleTemplate, inProgress map[string]bool) (*moduleTemplate, error, error) {
+	if t, ok := cache[absDir]; ok {
+		return t, nil, nil
+	}
+	if inProgress[absDir] {
+		return nil, nil, errModuleCycle
+	}
+	inProgress[absDir] = true
+	defer delete(inProgress, absDir)
+
+	files, walkErr := FindTerraformFiles(absDir)
+	if walkErr != nil {
+		return nil, walkErr, nil
+	}
+	resources, modules, diags, parseErr := Parse(files)
+	if parseErr != nil {
+		return nil, nil, parseErr
+	}
+
+	// Start the template with this dir's own resources/modules/diags.
+	// Modules and diagnostics are copied into fresh slices so later
+	// appends from child templates do not splice into the slice
+	// returned by Parse (paranoia — Parse already returns fresh
+	// slices, but the cache shares the *moduleTemplate across call
+	// sites and we want to be defensive against future code that
+	// mutates the cached entries).
+	tmpl := &moduleTemplate{
+		resources: resources,
+		modules:   append([]ModuleCall(nil), modules...),
+		diags:     append(hcl.Diagnostics(nil), diags...),
+	}
+
+	// Track which (File, Line) source positions we have already
+	// emitted a ModuleCall for, so cache reuse across multiple call
+	// sites of the same nested module does not produce duplicate
+	// entries in the final modules slice.
+	seenSites := make(map[string]bool, len(modules))
+	for _, m := range modules {
+		seenSites[fmt.Sprintf("%s:%d", m.File, m.Line)] = true
+	}
+
+	for _, m := range modules {
+		if m.SourceKind != SourceLocal {
+			continue
+		}
+		// Resolve the local source relative to the file containing
+		// the module block, NOT the process CWD or the root dir.
+		// Terraform's own module resolver works the same way, so a
+		// relative source like "../shared" is rooted at the
+		// declaring file's directory.
+		baseDir := filepath.Dir(m.File)
+		childAbs, absErr := filepath.Abs(filepath.Join(baseDir, m.Source))
+		if absErr != nil {
+			tmpl.diags = append(tmpl.diags, moduleLoadWarning(m, fmt.Errorf("resolve path: %w", absErr)))
+			continue
+		}
+		childTmpl, childWalkErr, childParseErr := buildModuleTemplate(childAbs, cache, inProgress)
+		switch {
+		case errors.Is(childParseErr, errModuleCycle):
+			tmpl.diags = append(tmpl.diags, &hcl.Diagnostic{
+				Severity: hcl.DiagWarning,
+				Summary:  "module recursion cycle",
+				Detail:   fmt.Sprintf("module %q at %s would re-enter a directory already being expanded; skipping", m.Name, m.Source),
+				Subject:  moduleSubject(m),
+			})
+			continue
+		case childWalkErr != nil:
+			tmpl.diags = append(tmpl.diags, moduleLoadWarning(m, childWalkErr))
+			continue
+		case childParseErr != nil:
+			tmpl.diags = append(tmpl.diags, moduleLoadWarning(m, childParseErr))
+			continue
+		}
+
+		// Instantiate the child template at this call site by deep-
+		// copying each resource and prepending m.Name to its
+		// ModulePath. The deep copy is mandatory: cached templates
+		// are shared between call sites, so reusing the same slice
+		// would let a later instantiation mutate an earlier one's
+		// path.
+		for _, r := range childTmpl.resources {
+			instanced := r
+			newPath := make([]string, 0, len(r.ModulePath)+1)
+			newPath = append(newPath, m.Name)
+			newPath = append(newPath, r.ModulePath...)
+			instanced.ModulePath = newPath
+			tmpl.resources = append(tmpl.resources, instanced)
+		}
+
+		// Pull up the child's module call sites (deduped) and
+		// diagnostics so the root caller sees the union of every
+		// level's reporting.
+		for _, cm := range childTmpl.modules {
+			site := fmt.Sprintf("%s:%d", cm.File, cm.Line)
+			if seenSites[site] {
+				continue
+			}
+			seenSites[site] = true
+			tmpl.modules = append(tmpl.modules, cm)
+		}
+		tmpl.diags = append(tmpl.diags, childTmpl.diags...)
+	}
+
+	cache[absDir] = tmpl
+	return tmpl, nil, nil
+}
+
+// moduleSubject returns a pointer to a synthetic hcl.Range pinned to
+// the module block's declaration site, suitable for the Subject field
+// of a hcl.Diagnostic. Pulling this out of the call sites keeps the
+// Diagnostic literals readable.
+func moduleSubject(m ModuleCall) *hcl.Range {
+	return &hcl.Range{
+		Filename: m.File,
+		Start:    hcl.Pos{Line: m.Line, Column: 1},
+		End:      hcl.Pos{Line: m.Line, Column: 1},
+	}
+}
+
+// moduleLoadWarning packages a child-load failure into the standard
+// "could not load local module" warning diagnostic. The Detail string
+// is single-line so callers that flatten diagnostics for terminal
+// output do not have to wrap.
+func moduleLoadWarning(m ModuleCall, err error) *hcl.Diagnostic {
+	return &hcl.Diagnostic{
+		Severity: hcl.DiagWarning,
+		Summary:  "could not load local module",
+		Detail:   fmt.Sprintf("module %q at %s: %v", m.Name, m.Source, err),
+		Subject:  moduleSubject(m),
+	}
 }
 
 // formatDiag flattens HCL diagnostics into a single-line
