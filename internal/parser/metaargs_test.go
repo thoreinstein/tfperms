@@ -150,6 +150,190 @@ func TestEvalMetaArgs_Count(t *testing.T) {
 	}
 }
 
+// TestEvalMetaArgs_PreventDestroy covers the lifecycle.prevent_destroy
+// signal: literal true flips the bool, anything else (literal false,
+// missing block, missing attribute, var ref) leaves it false.
+func TestEvalMetaArgs_PreventDestroy(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{
+			name: "prevent_destroy_true",
+			src: `resource "x" "y" {
+				lifecycle { prevent_destroy = true }
+			}`,
+			want: true,
+		},
+		{
+			name: "prevent_destroy_false",
+			src: `resource "x" "y" {
+				lifecycle { prevent_destroy = false }
+			}`,
+			want: false,
+		},
+		{
+			name: "prevent_destroy_absent_in_lifecycle",
+			src: `resource "x" "y" {
+				lifecycle { create_before_destroy = true }
+			}`,
+			want: false,
+		},
+		{
+			name: "no_lifecycle_block",
+			src:  `resource "x" "y" { bucket = "foo" }`,
+			want: false,
+		},
+		{
+			name: "prevent_destroy_via_var_not_literal",
+			src: `resource "x" "y" {
+				lifecycle { prevent_destroy = var.lock }
+			}`,
+			want: false,
+		},
+		{
+			name: "prevent_destroy_non_bool_literal",
+			src: `resource "x" "y" {
+				lifecycle { prevent_destroy = "true" }
+			}`,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			blk := parseBlock(t, tc.src)
+			// Pass metaCtxResolved so var.lock would resolve if we
+			// (incorrectly) ever consulted the eval context here. The
+			// expectation is that we ignore evalCtx for this signal.
+			res, _ := evalMetaArgs(blk, metaCtxResolved())
+			if res.preventDestroy != tc.want {
+				t.Errorf("preventDestroy = %v, want %v", res.preventDestroy, tc.want)
+			}
+		})
+	}
+}
+
+// TestEvalMetaArgs_DynamicBlocks covers dynamic-block label capture:
+// a single dynamic block, multiple dynamic blocks (labels in source
+// order, no dedupe), no dynamic blocks, and confirmation that a
+// dynamic block's own for_each does NOT influence keep/drop on the
+// resource itself.
+func TestEvalMetaArgs_DynamicBlocks(t *testing.T) {
+	cases := []struct {
+		name      string
+		src       string
+		wantKeep  bool
+		wantLabel []string
+	}{
+		{
+			name: "single_dynamic_block",
+			src: `resource "x" "y" {
+				dynamic "network_interface" {
+					for_each = var.unknown
+					content { action = "allow" }
+				}
+			}`,
+			wantKeep:  true,
+			wantLabel: []string{"network_interface"},
+		},
+		{
+			name: "two_dynamic_blocks_preserve_order",
+			src: `resource "x" "y" {
+				dynamic "a" {
+					for_each = []
+					content {}
+				}
+				dynamic "b" {
+					for_each = []
+					content {}
+				}
+			}`,
+			wantKeep:  true,
+			wantLabel: []string{"a", "b"},
+		},
+		{
+			name: "duplicate_dynamic_labels_not_deduped",
+			src: `resource "x" "y" {
+				dynamic "rule" {
+					for_each = []
+					content {}
+				}
+				dynamic "rule" {
+					for_each = []
+					content {}
+				}
+			}`,
+			wantKeep:  true,
+			wantLabel: []string{"rule", "rule"},
+		},
+		{
+			name:      "no_dynamic_blocks",
+			src:       `resource "x" "y" { bucket = "foo" }`,
+			wantKeep:  true,
+			wantLabel: nil,
+		},
+		{
+			name: "nested_dynamic_only_top_level_captured",
+			// Only the outer "a" should be captured — "b" sits inside
+			// a content body, which the spec calls a non-goal.
+			src: `resource "x" "y" {
+				dynamic "a" {
+					for_each = []
+					content {
+						dynamic "b" {
+							for_each = []
+							content {}
+						}
+					}
+				}
+			}`,
+			wantKeep:  true,
+			wantLabel: []string{"a"},
+		},
+		{
+			name: "dynamic_for_each_does_not_drop_resource",
+			// The resource has no top-level count/for_each, only a
+			// dynamic block. keep must be true regardless of the
+			// dynamic's for_each value.
+			src: `resource "x" "y" {
+				dynamic "rule" {
+					for_each = {}
+					content {}
+				}
+			}`,
+			wantKeep:  true,
+			wantLabel: []string{"rule"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			blk := parseBlock(t, tc.src)
+			res, _ := evalMetaArgs(blk, emptyCtx())
+			if res.keep != tc.wantKeep {
+				t.Errorf("keep = %v, want %v", res.keep, tc.wantKeep)
+			}
+			if !equalStringSlice(res.dynamicLabels, tc.wantLabel) {
+				t.Errorf("dynamicLabels = %v, want %v", res.dynamicLabels, tc.wantLabel)
+			}
+		})
+	}
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // TestEvalMetaArgs_ForEach covers the for_each acceptance criteria:
 // empty map/list/set/tuple drop; non-empty keep; unresolved or
 // non-collection expressions warn.
