@@ -1,0 +1,29 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "b",
+      "file": "main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "location",
+          "value": "US"
+        },
+        {
+          "name": "name",
+          "value": "my-bucket"
+        }
+      ]
+    },
+    {
+      "kind": "data",
+      "type": "google_project",
+      "name": "current",
+      "file": "main.tf",
+      "line": 6,
+      "attrs": []
+    }
+  ]
+}

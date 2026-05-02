@@ -1,0 +1,66 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "data",
+      "file": "main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "location",
+          "value": "US"
+        },
+        {
+          "name": "name",
+          "value": "data-bucket"
+        }
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket_iam_binding",
+      "name": "data_viewers",
+      "file": "main.tf",
+      "line": 6,
+      "attrs": [
+        {
+          "name": "bucket",
+          "value": null
+        },
+        {
+          "name": "members",
+          "value": [
+            "user:alice@example.com",
+            "user:bob@example.com"
+          ]
+        },
+        {
+          "name": "role",
+          "value": "roles/storage.objectViewer"
+        }
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket_iam_member",
+      "name": "single",
+      "file": "main.tf",
+      "line": 15,
+      "attrs": [
+        {
+          "name": "bucket",
+          "value": null
+        },
+        {
+          "name": "member",
+          "value": "user:carol@example.com"
+        },
+        {
+          "name": "role",
+          "value": "roles/storage.admin"
+        }
+      ]
+    }
+  ]
+}

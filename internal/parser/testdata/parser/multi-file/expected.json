@@ -1,0 +1,38 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "alpha",
+      "file": "a.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "alpha"
+        }
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "beta",
+      "file": "b.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "beta"
+        }
+      ]
+    },
+    {
+      "kind": "data",
+      "type": "google_project",
+      "name": "current",
+      "file": "b.tf",
+      "line": 5,
+      "attrs": []
+    }
+  ]
+}
