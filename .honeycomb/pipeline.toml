@@ -1,0 +1,63 @@
+[pipeline]
+name = "default"
+description = "Standard development pipeline"
+entry = "refine"
+
+[defaults]
+runner = "claude"
+timeout = "30m"
+max_retries = 2
+
+[stages.refine]
+description = "Rough idea into well-formed spec"
+prompt = ".honeycomb/prompts/refine.md"
+runner = "gemini"
+model = "gemini-3-flash-preview"
+on_success = "analyze"
+
+[stages.refine.gate]
+prompt = ".honeycomb/prompts/refine-review.md"
+description = "Validate spec completeness and clarity"
+runner = "claude"
+
+[stages.analyze]
+description = "Deep analysis and task breakdown"
+prompt = ".honeycomb/prompts/analyze.md"
+runner = "gemini"
+model = "gemini-3-flash-preview"
+on_success = "implement"
+
+[stages.implement]
+description = "Code implementation"
+prompt = ".honeycomb/prompts/implement.md"
+runner = "claude"
+on_success = "review"
+worktree = true
+max_retries = 5
+
+[stages.review]
+description = "Code review"
+prompt = ".honeycomb/prompts/review.md"
+runner = "codex"
+on_success = "compound"
+worktree = true
+
+[[stages.review.routing]]
+condition = "gate_category:verdict_inconsistent,dimensions_missing,lacks_specificity,superficial_review,lint_unreconciled"
+target = "review"
+reason = "structural review failure, retrying review stage"
+
+[[stages.review.routing]]
+condition = "exit:nonzero"
+target = "implement"
+reason = "review gate rejected, returning to implement to address feedback"
+
+[stages.review.gate]
+prompt = ".honeycomb/prompts/review-gate.md"
+description = "Validate review covers all dimensions and verdict is well-formed"
+runner = "claude"
+
+[stages.compound]
+description = "Extract and compound knowledge"
+prompt = ".honeycomb/prompts/compound.md"
+runner = "claude"
