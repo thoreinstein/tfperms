@@ -255,6 +255,18 @@ var topLevelSchema = &hcl.BodySchema{
 // without touching the filesystem; the walker errors out earlier when a
 // directory has no .tf files, so this code path is mostly defensive.
 func Parse(files []string) ([]Resource, []ModuleCall, hcl.Diagnostics, error) {
+	return parseConfig(files, nil)
+}
+
+// parseConfig is the override-aware sibling of Parse. It is called by
+// LoadRecursive's buildModuleTemplate with the literal arguments
+// propagated from a parent module call; Parse itself wraps it with a
+// nil override map so the public API surface stays stable.
+//
+// The override map is threaded straight through to buildEvalContext —
+// see that function for the priority rules (override > default >
+// absent) and the undeclared-name filter.
+func parseConfig(files []string, overrides map[string]cty.Value) ([]Resource, []ModuleCall, hcl.Diagnostics, error) {
 	if len(files) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -276,10 +288,7 @@ func Parse(files []string) ([]Resource, []ModuleCall, hcl.Diagnostics, error) {
 	// can iterate per-file *hclsyntax.Body — MergeFiles returns an opaque
 	// merged body that cannot be cast back, and we want per-file Subject
 	// ranges on cycle warnings.
-	//
-	// Plain Parse never propagates module arguments — only LoadRecursive's
-	// recursive walk does — so the override map is nil here.
-	evalCtx, evalDiags := buildEvalContext(parsed, nil)
+	evalCtx, evalDiags := buildEvalContext(parsed, overrides)
 
 	// MergeFiles unifies the bodies into a single hcl.Body the schema-based
 	// extractor can iterate once. The returned body is an internal
@@ -466,7 +475,10 @@ func LoadRecursive(dir string) ([]Resource, []ModuleCall, hcl.Diagnostics, error
 	}
 	cache := map[string]*moduleTemplate{}
 	inProgress := map[string]bool{}
-	template, walkErr, parseErr := buildModuleTemplate(absDir, cache, inProgress)
+	// Root configurations have no propagated arguments; overrides start
+	// at nil and only become non-empty when buildModuleTemplate recurses
+	// into a `module` call site whose Args resolved to literal values.
+	template, walkErr, parseErr := buildModuleTemplate(absDir, nil, cache, inProgress)
 	if walkErr != nil {
 		return nil, nil, nil, walkErr
 	}
@@ -482,6 +494,13 @@ func LoadRecursive(dir string) ([]Resource, []ModuleCall, hcl.Diagnostics, error
 // own module name to each resource's ModulePath when instantiating the
 // returned template at a parent call site.
 //
+// overrides carries the literal arguments propagated from the parent
+// module call (or nil at the root). They flow through parseConfig into
+// buildEvalContext so the child's `count = var.X ? 1 : 0`,
+// `for_each = var.Y`, attribute references, and the resolution of its
+// own nested `module` blocks' arguments all see the parent-supplied
+// values.
+//
 // The function returns three values to disambiguate the failure modes:
 //   - (template, nil, nil) — success.
 //   - (nil, walkErr, nil)  — the walker rejected absDir (missing dir,
@@ -492,11 +511,20 @@ func LoadRecursive(dir string) ([]Resource, []ModuleCall, hcl.Diagnostics, error
 //     absDir. Same treatment as walkErr at child / root levels.
 //
 // Cycle detection: re-entering a directory currently up the stack
-// returns (nil, nil, errModuleCycle). Callers translate the sentinel to
-// a warning at the offending call site rather than recursing
-// indefinitely.
-func buildModuleTemplate(absDir string, cache map[string]*moduleTemplate, inProgress map[string]bool) (*moduleTemplate, error, error) {
-	if t, ok := cache[absDir]; ok {
+// returns (nil, nil, errModuleCycle). The cycle key is the directory
+// path alone — recursing back into a dir with different overrides is
+// still a cycle from a static-evaluation standpoint, and pretending
+// otherwise would let pathological fixtures recurse indefinitely as
+// long as some argument keeps changing.
+//
+// The cache, however, is keyed by (absDir, overrides) via
+// buildCacheKey: the same module instantiated with two different
+// argument sets must produce two distinct templates so that a
+// `count = var.enabled ? 1 : 0` block resolves to different keep/drop
+// outcomes per call site.
+func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache map[string]*moduleTemplate, inProgress map[string]bool) (*moduleTemplate, error, error) {
+	cacheKey := buildCacheKey(absDir, overrides)
+	if t, ok := cache[cacheKey]; ok {
 		return t, nil, nil
 	}
 	if inProgress[absDir] {
@@ -509,7 +537,7 @@ func buildModuleTemplate(absDir string, cache map[string]*moduleTemplate, inProg
 	if walkErr != nil {
 		return nil, walkErr, nil
 	}
-	resources, modules, diags, parseErr := Parse(files)
+	resources, modules, diags, parseErr := parseConfig(files, overrides)
 	if parseErr != nil {
 		return nil, nil, parseErr
 	}
@@ -551,7 +579,14 @@ func buildModuleTemplate(absDir string, cache map[string]*moduleTemplate, inProg
 			tmpl.diags = append(tmpl.diags, moduleLoadWarning(m, fmt.Errorf("resolve path: %w", absErr)))
 			continue
 		}
-		childTmpl, childWalkErr, childParseErr := buildModuleTemplate(childAbs, cache, inProgress)
+		// Filter the call-site arguments down to entries that resolved
+		// to a known cty.Value. Unresolved args (cty.NilVal — e.g. an
+		// expression that references something this stage cannot
+		// evaluate) cannot be folded into the child's eval context and
+		// would surface as an unknown anyway; dropping them keeps the
+		// override map a strict literal-only set.
+		childOverrides := literalOverrides(m.Args)
+		childTmpl, childWalkErr, childParseErr := buildModuleTemplate(childAbs, childOverrides, cache, inProgress)
 		switch {
 		case errors.Is(childParseErr, errModuleCycle):
 			tmpl.diags = append(tmpl.diags, &hcl.Diagnostic{
@@ -598,8 +633,69 @@ func buildModuleTemplate(absDir string, cache map[string]*moduleTemplate, inProg
 		tmpl.diags = append(tmpl.diags, childTmpl.diags...)
 	}
 
-	cache[absDir] = tmpl
+	cache[cacheKey] = tmpl
 	return tmpl, nil, nil
+}
+
+// buildCacheKey returns the moduleTemplate cache key for (absDir,
+// overrides). When overrides is empty, the key is just absDir — the
+// pre-arg-propagation behaviour, so existing callers see no extra
+// allocation. Non-empty override sets are appended in sorted-name
+// order with each value rendered via cty.Value.GoString(), which is
+// deterministic for the literal scalars we propagate (strings, numbers,
+// bools, and tuples/objects of the same).
+//
+// Why include overrides in the key at all: a `count = var.enabled ?
+// 1 : 0` block inside the same module directory must produce a "kept"
+// resource for one call site (enabled = true) and a dropped resource
+// for another (enabled = false). Reusing a cached template across
+// distinct argument sets would collapse those into one outcome.
+func buildCacheKey(absDir string, overrides map[string]cty.Value) string {
+	if len(overrides) == 0 {
+		return absDir
+	}
+	keys := make([]string, 0, len(overrides))
+	for k := range overrides {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(absDir)
+	for _, k := range keys {
+		b.WriteString("|")
+		b.WriteString(k)
+		b.WriteString("=")
+		b.WriteString(overrides[k].GoString())
+	}
+	return b.String()
+}
+
+// literalOverrides filters a module call's resolved Args down to the
+// subset that can be propagated as overrides — i.e. entries whose
+// cty.Value is non-Nil and known. Unknown values (cty.NilVal, an
+// IsKnown() == false placeholder) cannot meaningfully override a
+// child's variable resolution and are dropped.
+//
+// Returns nil when the resulting set is empty so buildCacheKey's
+// "no overrides → bare absDir key" fast path stays active.
+func literalOverrides(args map[string]cty.Value) map[string]cty.Value {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make(map[string]cty.Value, len(args))
+	for k, v := range args {
+		if v == cty.NilVal {
+			continue
+		}
+		if !v.IsKnown() {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // moduleSubject returns a pointer to a synthetic hcl.Range pinned to
