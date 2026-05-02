@@ -34,24 +34,40 @@ import (
 //     the keyword line, not the brace line.
 //   - Attrs is always non-nil. It contains exactly one entry per
 //     top-level attribute on the block, excluding Terraform meta-
-//     arguments (provider, depends_on, count, for_each — the latter two
-//     belong to story .7's count/for_each routing). Nested blocks
-//     (lifecycle, dynamic, provisioner, ...) do not contribute keys.
-//     Each value is either a fully-resolved cty.Value (literals; var.X
-//     / local.X resolved through the eval context built from the
-//     config's `variable` and `locals` blocks — see evalctx.go) or
-//     cty.NilVal when the right-hand side could not be evaluated at
-//     this stage (function calls, interpolations referencing unknowns,
-//     cross-resource references, missing/unresolved variables/locals).
-//     Callers that need richer resolution should treat cty.NilVal as
-//     "deferred / unknown" rather than "absent".
+//     arguments (provider, depends_on, count, for_each — count /
+//     for_each are routed through metaargs.go's evalMetaArgs and
+//     surface via Parse's keep/drop decision and warning diagnostics).
+//     Nested blocks (lifecycle, dynamic, provisioner, ...) do not
+//     contribute keys. Each value is either a fully-resolved cty.Value
+//     (literals; var.X / local.X resolved through the eval context
+//     built from the config's `variable` and `locals` blocks — see
+//     evalctx.go) or cty.NilVal when the right-hand side could not be
+//     evaluated at this stage (function calls, interpolations
+//     referencing unknowns, cross-resource references,
+//     missing/unresolved variables/locals). Callers that need richer
+//     resolution should treat cty.NilVal as "deferred / unknown"
+//     rather than "absent".
+//   - DynamicBlocks holds the labels of `dynamic "<label>" { ... }`
+//     blocks declared *directly* on this resource's body, in source
+//     order. Empty slice (or nil; both are valid zero values, callers
+//     must not rely on the distinction) when there are no dynamic
+//     blocks. Only top-level dynamic blocks are captured — dynamic
+//     blocks nested inside another block (e.g. inside a `content`
+//     body) are deliberately ignored at this layer. v1 non-goal #1.
+//   - PreventDestroy is true iff the resource declares a `lifecycle {
+//     prevent_destroy = true }` block whose RHS is a literal boolean
+//     `true`. Anything else — `prevent_destroy = false`, no lifecycle
+//     block, no prevent_destroy attribute, or a non-literal expression
+//     such as `var.lock` — leaves this `false`. v1 non-goal #5.
 type Resource struct {
-	Kind  string
-	Type  string
-	Name  string
-	File  string
-	Line  int
-	Attrs map[string]cty.Value
+	Kind           string
+	Type           string
+	Name           string
+	File           string
+	Line           int
+	Attrs          map[string]cty.Value
+	DynamicBlocks  []string
+	PreventDestroy bool
 }
 
 // topLevelSchema enumerates the top-level blocks Parse extracts. Anything
