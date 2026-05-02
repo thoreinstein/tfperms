@@ -52,16 +52,20 @@ func keysOf(rs []Resource) []resKey {
 }
 
 // TestParse_Empty anchors the public contract: Parse(nil) and Parse([]) must
-// return (nil, nil, nil) without touching the filesystem. cmd/tfperms relies
-// on this so it can call Parse unconditionally.
+// return (nil, nil, nil, nil) — resources, modules, diagnostics, and error
+// all nil — without touching the filesystem. cmd/tfperms relies on this so
+// it can call Parse unconditionally.
 func TestParse_Empty(t *testing.T) {
 	for _, in := range [][]string{nil, {}} {
-		got, _, diags, err := Parse(in)
+		got, mods, diags, err := Parse(in)
 		if err != nil {
 			t.Errorf("Parse(%v) error: %v", in, err)
 		}
 		if got != nil {
 			t.Errorf("Parse(%v) = %v, want nil", in, got)
+		}
+		if mods != nil {
+			t.Errorf("Parse(%v) modules = %v, want nil", in, mods)
 		}
 		if diags != nil {
 			t.Errorf("Parse(%v) diags = %v, want nil", in, diags)
@@ -629,6 +633,13 @@ func TestClassifySource(t *testing.T) {
 		{"./child", SourceLocal},
 		{"../sibling", SourceLocal},
 		{"hashicorp/consul/aws", SourceRegistry},
+		// Registry triplet retains its kind when followed by a
+		// go-getter "//<subdir>" suffix or a "?query"/"#fragment"
+		// modifier. Without the strip-before-split, these would
+		// fall through to SourceUnknown.
+		{"hashicorp/consul/aws//modules/vpc", SourceRegistry},
+		{"hashicorp/consul/aws?ref=v1.0.0", SourceRegistry},
+		{"hashicorp/consul/aws#main", SourceRegistry},
 		// Private registry: <hostname>/<namespace>/<name>/<provider>.
 		// First segment contains a "." → hostname → registry.
 		{"app.terraform.io/example-corp/k8s-cluster/azurerm", SourceRegistry},
@@ -702,8 +713,15 @@ module "registry" {
 	if m1.SourceKind != SourceLocal {
 		t.Errorf("modules[0].SourceKind = %q, want %q", m1.SourceKind, SourceLocal)
 	}
-	if want := cty.StringVal("foo"); !m1.Args["input"].Equals(want).True() {
-		t.Errorf("modules[0].Args[input] = %#v, want %#v", m1.Args["input"], want)
+	got, ok := m1.Args["input"]
+	if !ok {
+		t.Fatalf("modules[0].Args missing key %q; got keys %v", "input", m1.Args)
+	}
+	if got == cty.NilVal {
+		t.Fatalf("modules[0].Args[input] is cty.NilVal; expected resolved value")
+	}
+	if want := cty.StringVal("foo"); !got.Equals(want).True() {
+		t.Errorf("modules[0].Args[input] = %#v, want %#v", got, want)
 	}
 
 	// Second module: registry
