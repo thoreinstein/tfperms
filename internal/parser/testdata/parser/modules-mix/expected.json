@@ -13,7 +13,7 @@
     {
       "severity": "warning",
       "summary": "non-local module source",
-      "detail": "module \"git\": tfperms does not parse non-local source \"git::https://example.com/repo.git\"",
+      "detail": "module \"private_registry\": tfperms does not parse non-local source \"app.terraform.io/example-corp/k8s-cluster/azurerm\"",
       "subject": {
         "file": "main.tf",
         "line": 11,
@@ -23,7 +23,7 @@
     {
       "severity": "warning",
       "summary": "non-local module source",
-      "detail": "module \"http\": tfperms does not parse non-local source \"https://example.com/module.zip\"",
+      "detail": "module \"git\": tfperms does not parse non-local source \"git::https://example.com/repo.git\"",
       "subject": {
         "file": "main.tf",
         "line": 15,
@@ -33,10 +33,20 @@
     {
       "severity": "warning",
       "summary": "non-local module source",
-      "detail": "module \"unknown\": tfperms does not parse non-local source \"just-a-string\"",
+      "detail": "module \"http\": tfperms does not parse non-local source \"https://example.com/module.zip\"",
       "subject": {
         "file": "main.tf",
         "line": 19,
+        "col": 1
+      }
+    },
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"unknown\": tfperms does not parse non-local source \"just-a-string\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 23,
         "col": 1
       }
     }
@@ -70,11 +80,19 @@
       ]
     },
     {
+      "name": "private_registry",
+      "source": "app.terraform.io/example-corp/k8s-cluster/azurerm",
+      "source_kind": "registry",
+      "file": "main.tf",
+      "line": 11,
+      "args": []
+    },
+    {
       "name": "git",
       "source": "git::https://example.com/repo.git",
       "source_kind": "git",
       "file": "main.tf",
-      "line": 11,
+      "line": 15,
       "args": []
     },
     {
@@ -82,7 +100,7 @@
       "source": "https://example.com/module.zip",
       "source_kind": "archive",
       "file": "main.tf",
-      "line": 15,
+      "line": 19,
       "args": []
     },
     {
@@ -90,7 +108,7 @@
       "source": "just-a-string",
       "source_kind": "unknown",
       "file": "main.tf",
-      "line": 19,
+      "line": 23,
       "args": []
     }
   ]

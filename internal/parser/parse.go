@@ -101,6 +101,16 @@ const (
 
 // classifySource determines the SourceKind from the source string based on
 // standard Terraform module source patterns.
+//
+// Registry sources cover both:
+//   - Public registry: <namespace>/<name>/<provider>           (3 parts)
+//   - Private registry: <hostname>/<namespace>/<name>/<provider> (4 parts,
+//     hostname identified by a "." in the first segment)
+//
+// The hostname dot test discriminates private-registry calls from a stray
+// 4-segment local-style path like "a/b/c/d" (which has no hostname) — those
+// fall through to SourceUnknown so downstream consumers do not silently
+// treat unrelated strings as registry references.
 func classifySource(source string) string {
 	if strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
 		return SourceLocal
@@ -114,10 +124,18 @@ func classifySource(source string) string {
 		strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		return SourceArchive
 	}
-	// Registry sources match the namespace/name/provider triplet pattern.
 	parts := strings.Split(source, "/")
-	if len(parts) == 3 {
+	switch len(parts) {
+	case 3:
+		// Public Terraform registry: namespace/name/provider.
 		return SourceRegistry
+	case 4:
+		// Private registry: hostname/namespace/name/provider. The
+		// presence of a "." in the leading segment is what
+		// distinguishes a hostname from an unrelated 4-segment path.
+		if strings.Contains(parts[0], ".") {
+			return SourceRegistry
+		}
 	}
 	return SourceUnknown
 }

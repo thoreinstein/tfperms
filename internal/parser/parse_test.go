@@ -617,6 +617,38 @@ func equalResKeys(a, b []resKey) bool {
 	return true
 }
 
+// TestClassifySource pins down the source-kind classifier table. Cases are
+// kept inline (not split into separate tests) so a future regression like
+// "added a new prefix that swallows registry triplets" is visible as a row
+// flip rather than a missing test.
+func TestClassifySource(t *testing.T) {
+	cases := []struct {
+		source string
+		want   string
+	}{
+		{"./child", SourceLocal},
+		{"../sibling", SourceLocal},
+		{"hashicorp/consul/aws", SourceRegistry},
+		// Private registry: <hostname>/<namespace>/<name>/<provider>.
+		// First segment contains a "." → hostname → registry.
+		{"app.terraform.io/example-corp/k8s-cluster/azurerm", SourceRegistry},
+		// 4 segments but no hostname dot → not a registry path.
+		{"a/b/c/d", SourceUnknown},
+		{"git::https://example.com/repo.git", SourceGit},
+		{"git@github.com:foo/bar.git", SourceGit},
+		{"https://example.com/module.zip", SourceArchive},
+		{"http://example.com/m.tar.gz", SourceArchive},
+		{"just-a-string", SourceUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.source, func(t *testing.T) {
+			if got := classifySource(tc.source); got != tc.want {
+				t.Errorf("classifySource(%q) = %q, want %q", tc.source, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestParse_Modules proves the Parse → extractModule wire-up: a module
 // block with local and non-local sources must produce ModuleCall values
 // with correctly classified SourceKind and Args.

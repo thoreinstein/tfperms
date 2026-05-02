@@ -8,6 +8,10 @@ module "registry" {
   version = "0.1.0"
 }
 
+module "private_registry" {
+  source = "app.terraform.io/example-corp/k8s-cluster/azurerm"
+}
+
 module "git" {
   source = "git::https://example.com/repo.git"
 }
