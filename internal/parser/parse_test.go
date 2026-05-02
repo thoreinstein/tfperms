@@ -1239,6 +1239,62 @@ resource "x" "leaf" {
 		}
 	})
 
+	t.Run("override gates child for_each conditional", func(t *testing.T) {
+		// The same module is called twice: once with an empty map for
+		// for_each (resource drops cleanly with no warning), once with
+		// a non-empty map (resource survives). Without the override
+		// flow, var.instances would be cty.NilVal in the child context,
+		// which evalForEach treats as "unresolved" — keep + warn — so
+		// both call sites would survive and emit a warning. This test
+		// is the regression bar for the for_each path that the doc
+		// comment at parse.go:500 advertises but the original test
+		// suite did not exercise.
+		dir := t.TempDir()
+		root := `module "on" {
+  source    = "./mod"
+  instances = { a = "x" }
+}
+module "off" {
+  source    = "./mod"
+  instances = {}
+}`
+		if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(root), 0o644); err != nil {
+			t.Fatalf("write root: %v", err)
+		}
+		modDir := filepath.Join(dir, "mod")
+		if err := os.MkdirAll(modDir, 0o755); err != nil {
+			t.Fatalf("mkdir mod: %v", err)
+		}
+		modSrc := `variable "instances" { type = map(string) }
+resource "x" "fanout" {
+  for_each = var.instances
+}`
+		if err := os.WriteFile(filepath.Join(modDir, "main.tf"), []byte(modSrc), 0o644); err != nil {
+			t.Fatalf("write mod: %v", err)
+		}
+
+		res, _, diags, err := LoadRecursive(dir)
+		if err != nil {
+			t.Fatalf("LoadRecursive: %v", err)
+		}
+		// A resolved for_each (empty or non-empty) must not surface an
+		// unresolved-conditional warning — the override fed into the
+		// child eval context should make for_each fully known.
+		for _, d := range diags {
+			if d.Severity == hcl.DiagWarning && d.Summary == "unresolved conditional" {
+				t.Errorf("unexpected unresolved-conditional warning; child for_each should resolve via override: %v", diags)
+			}
+		}
+		// Exactly one survivor: the call site with the non-empty map.
+		if len(res) != 1 {
+			t.Fatalf("got %d resources, want 1 (only the non-empty for_each call site survives): %+v", len(res), res)
+		}
+		got := res[0].ModulePath
+		if len(got) != 1 || got[0] != "on" {
+			t.Errorf("ModulePath = %v, want [on]", got)
+		}
+	})
+
 	t.Run("override flows transitively two levels deep", func(t *testing.T) {
 		// root → a → b. Root supplies `enabled = true` to a; a's own
 		// `module "b"` block forwards `enabled = var.enabled`. b's
@@ -1296,8 +1352,12 @@ resource "x" "deep" {
 // distinct override values → distinct keys. Without this, the cache
 // would either collapse semantically distinct call sites or fail to
 // reuse identical ones.
+//
+// The directory is sourced from t.TempDir() rather than a hard-coded
+// "/tmp/mod" so the test stays hermetic and portable to OSes (Windows)
+// where /tmp is not a meaningful path.
 func TestBuildCacheKey(t *testing.T) {
-	dir := "/tmp/mod"
+	dir := filepath.Join(t.TempDir(), "mod")
 
 	// Empty / nil overrides → bare absDir.
 	if got := buildCacheKey(dir, nil); got != dir {
