@@ -446,7 +446,17 @@ type moduleTemplate struct {
 // `module` block (filepath.Dir(m.File) + m.Source), not the process
 // CWD or the root directory — this matches Terraform's own module
 // resolution semantics for relative sources.
+//
+// dir must be a non-empty path. An empty (or all-whitespace) dir is
+// rejected with an error rather than being silently resolved to the
+// process working directory via filepath.Abs(""), which would make
+// behaviour depend on ambient CWD state and is almost always a caller
+// bug. Pass "." explicitly if the current directory is genuinely
+// intended.
 func LoadRecursive(dir string) ([]Resource, []ModuleCall, hcl.Diagnostics, error) {
+	if strings.TrimSpace(dir) == "" {
+		return nil, nil, nil, fmt.Errorf("LoadRecursive: dir is empty; pass %q explicitly to load the current directory", ".")
+	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("abs %q: %w", dir, err)
