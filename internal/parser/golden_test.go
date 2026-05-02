@@ -15,9 +15,10 @@ package parser
 //
 //   - Walker errors (e.g. directory has no .tf files). Captured via
 //     `walker_error`. Parse is never invoked in this branch.
-//   - Parse errors (malformed HCL). Captured via `parse_error`; the
-//     resource list and diagnostics are omitted because Parse returned
-//     (nil, nil, err).
+//   - Parse errors (malformed HCL). Captured via `parse_error`;
+//     diagnostics are omitted (Parse returned nil) and `resources` is
+//     rendered as an empty array because the field is intentionally
+//     non-omitempty for shape stability.
 //   - Warning-severity diagnostics (cycles, unresolved meta-args). These
 //     coexist with the resources slice on the same document.
 //
