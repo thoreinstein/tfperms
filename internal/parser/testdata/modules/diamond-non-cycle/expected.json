@@ -1,0 +1,104 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_pubsub_topic",
+      "name": "in_a",
+      "file": "a/main.tf",
+      "line": 5,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "diamond-non-cycle-in-a"
+        }
+      ],
+      "module_path": [
+        "left"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "shared",
+      "file": "shared/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "diamond-non-cycle-shared"
+        }
+      ],
+      "module_path": [
+        "left",
+        "common"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_pubsub_topic",
+      "name": "in_b",
+      "file": "b/main.tf",
+      "line": 5,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "diamond-non-cycle-in-b"
+        }
+      ],
+      "module_path": [
+        "right"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "shared",
+      "file": "shared/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "diamond-non-cycle-shared"
+        }
+      ],
+      "module_path": [
+        "right",
+        "common"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "left",
+      "source": "./a",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": []
+    },
+    {
+      "name": "right",
+      "source": "./b",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 5,
+      "args": []
+    },
+    {
+      "name": "common",
+      "source": "../shared",
+      "source_kind": "local",
+      "file": "a/main.tf",
+      "line": 1,
+      "args": []
+    },
+    {
+      "name": "common",
+      "source": "../shared",
+      "source_kind": "local",
+      "file": "b/main.tf",
+      "line": 1,
+      "args": []
+    }
+  ]
+}
