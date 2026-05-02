@@ -650,6 +650,14 @@ func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache ma
 // resource for one call site (enabled = true) and a dropped resource
 // for another (enabled = false). Reusing a cached template across
 // distinct argument sets would collapse those into one outcome.
+//
+// Why length-prefix each component when overrides are present: raw
+// concatenation with `|` and `=` separators is ambiguous because a
+// directory path on POSIX may legally contain those bytes. Without
+// length prefixes, ".../mod|enabled=cty.True" with no overrides would
+// produce the same key as ".../mod" plus an `enabled = cty.True`
+// override, and the loader would hand back the wrong cached template.
+// Length-prefixing every component makes the encoding unambiguous.
 func buildCacheKey(absDir string, overrides map[string]cty.Value) string {
 	if len(overrides) == 0 {
 		return absDir
@@ -660,12 +668,10 @@ func buildCacheKey(absDir string, overrides map[string]cty.Value) string {
 	}
 	sort.Strings(keys)
 	var b strings.Builder
-	b.WriteString(absDir)
+	fmt.Fprintf(&b, "%d:%s", len(absDir), absDir)
 	for _, k := range keys {
-		b.WriteString("|")
-		b.WriteString(k)
-		b.WriteString("=")
-		b.WriteString(overrides[k].GoString())
+		vStr := overrides[k].GoString()
+		fmt.Fprintf(&b, "|%d:%s=%d:%s", len(k), k, len(vStr), vStr)
 	}
 	return b.String()
 }

@@ -1383,6 +1383,23 @@ func TestBuildCacheKey(t *testing.T) {
 	if buildCacheKey(dir, c) == buildCacheKey(dir, d) {
 		t.Errorf("buildCacheKey collapsed distinct values: both = %q", buildCacheKey(dir, c))
 	}
+
+	// Regression: a directory whose name contains the bytes a naive
+	// concatenation would emit for an override must NOT collide with a
+	// different directory plus that override. On POSIX the path
+	// ".../mod|enabled=cty.True" is legal, and cty.True.GoString() is
+	// "cty.True", so a raw `absDir + "|" + k + "=" + v.GoString()`
+	// encoding produces identical bytes for the two inputs below — the
+	// loader would then hand back the wrong cached template.
+	// Two independent TempDir() calls keep the suffixes the only thing
+	// that could produce the collision.
+	collidingDir := filepath.Join(t.TempDir(), "mod|enabled=cty.True")
+	plainDir := filepath.Join(t.TempDir(), "mod")
+	keyCollide := buildCacheKey(collidingDir, nil)
+	keyPlain := buildCacheKey(plainDir, map[string]cty.Value{"enabled": cty.True})
+	if keyCollide == keyPlain {
+		t.Errorf("buildCacheKey collision between path-encoded and override-encoded inputs: %q", keyCollide)
+	}
 }
 
 // TestLiteralOverrides covers the filter that drops unresolved entries
