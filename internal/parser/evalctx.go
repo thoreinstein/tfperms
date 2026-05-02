@@ -73,13 +73,38 @@ type localDecl struct {
 // `local` object values plus any warning-severity diagnostics. The
 // returned context is always non-nil; the diagnostics slice may be
 // empty.
-func buildEvalContext(files []*hcl.File) (*hcl.EvalContext, hcl.Diagnostics) {
+//
+// overrides may be nil. When non-nil, each entry binds a declared
+// variable name to a propagated value (typically a literal module
+// argument flowing in from a parent caller via LoadRecursive). An
+// override takes priority over the same variable's `default = ...`
+// expression. Override entries whose name is not declared by any
+// `variable` block in `files` are silently dropped — that mirrors the
+// rest of buildEvalContext's best-effort contract: undeclared names
+// never appear in the resulting `var` object.
+func buildEvalContext(files []*hcl.File, overrides map[string]cty.Value) (*hcl.EvalContext, hcl.Diagnostics) {
 	varExprs, localDecls := collectDecls(files)
 
-	// Resolve variable defaults against a nil context. Literals succeed;
-	// anything referencing functions or other names fails and is absent.
+	// Resolve each declared variable in priority order:
+	//   1. an override (propagated from a parent module call);
+	//   2. the variable's literal default expression, evaluated against
+	//      a nil context per the variable-default contract;
+	//   3. otherwise, absent.
+	// Overrides are filtered to declared names so propagating
+	// `module "m" { foo = "x" }` into a child that never declared
+	// `variable "foo"` does not pollute the child's `var` namespace.
 	varValues := make(map[string]cty.Value, len(varExprs))
 	for name, expr := range varExprs {
+		if v, ok := overrides[name]; ok && v != cty.NilVal && v.IsKnown() {
+			varValues[name] = v
+			continue
+		}
+		// expr == nil means the variable is declared without a default.
+		// With no override, it stays absent — same outcome the previous
+		// implementation produced by simply not inserting the key.
+		if expr == nil {
+			continue
+		}
 		val, diags := expr.Value(nil)
 		if diags.HasErrors() || !val.IsKnown() {
 			continue
@@ -146,9 +171,16 @@ func buildEvalContext(files []*hcl.File) (*hcl.EvalContext, hcl.Diagnostics) {
 }
 
 // collectDecls walks every parsed file's *hclsyntax.Body and extracts
-// variable defaults and locals bindings. Files whose bodies are not
-// *hclsyntax.Body (theoretically possible through some HCL extensions
-// but not produced by ParseConfig) are skipped defensively.
+// variable declarations and locals bindings. Files whose bodies are
+// not *hclsyntax.Body (theoretically possible through some HCL
+// extensions but not produced by ParseConfig) are skipped defensively.
+//
+// varExprs has one entry per declared variable. The value is the
+// variable's `default` expression when one is present; nil when the
+// variable is declared without a default. Distinguishing "declared
+// without default" from "not declared" matters for buildEvalContext's
+// override path: an undeclared name never enters the `var` object,
+// even when a caller propagates an argument under that name.
 //
 // First-declaration-wins semantics: if a name is declared in multiple
 // files (a variable redeclaration, or two `locals { x = ... }` blocks
@@ -181,11 +213,19 @@ func collectDecls(files []*hcl.File) (map[string]hcl.Expression, map[string]loca
 				}
 				varBody, ok := blk.Body.(*hclsyntax.Body)
 				if !ok {
+					// Body unparseable → record as declared-without-
+					// default so an override can still resolve it.
+					varExprs[name] = nil
 					continue
 				}
 				varContent, _, _ := varBody.PartialContent(variableSchema)
 				if attr, ok := varContent.Attributes["default"]; ok {
 					varExprs[name] = attr.Expr
+				} else {
+					// Declared but no default. nil signals "no default
+					// expression to evaluate"; an override (if any)
+					// still applies in buildEvalContext.
+					varExprs[name] = nil
 				}
 			case "locals":
 				localsBody, ok := blk.Body.(*hclsyntax.Body)
