@@ -1053,3 +1053,305 @@ func TestLoadRecursive_Cycle(t *testing.T) {
 		t.Errorf("expected cycle warning, got %v", diags)
 	}
 }
+
+// TestLoadRecursive_ArgumentPropagation exercises the literal-argument
+// flow from a parent `module` call into the child module's eval
+// context. Each subtest is a self-contained fixture so failures point
+// at exactly one invariant.
+//
+// Invariants covered:
+//   - A literal string arg overrides a child variable's default.
+//   - A literal bool arg gates a child resource via `count = var.X ? 1
+//     : 0`. With enabled = true the resource survives; with enabled =
+//     false it is dropped (and produces no warning, since count = 0 is
+//     a clean answer per evalMetaArgs).
+//   - Two call sites with different literal args produce distinct
+//     resource sets — the moduleTemplate cache must not collapse them.
+//   - An unresolved argument expression (referring to a variable with
+//     no default) does not propagate; the child's own default applies.
+func TestLoadRecursive_ArgumentPropagation(t *testing.T) {
+	t.Run("string override flows into child attrs", func(t *testing.T) {
+		dir := t.TempDir()
+		root := `module "child" {
+  source = "./mod"
+  region = "eu-west1"
+}`
+		if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(root), 0o644); err != nil {
+			t.Fatalf("write root: %v", err)
+		}
+		modDir := filepath.Join(dir, "mod")
+		if err := os.MkdirAll(modDir, 0o755); err != nil {
+			t.Fatalf("mkdir mod: %v", err)
+		}
+		modSrc := `variable "region" { default = "us-east1" }
+resource "x" "leaf" {
+  region = var.region
+}`
+		if err := os.WriteFile(filepath.Join(modDir, "main.tf"), []byte(modSrc), 0o644); err != nil {
+			t.Fatalf("write mod: %v", err)
+		}
+
+		res, _, _, err := LoadRecursive(dir)
+		if err != nil {
+			t.Fatalf("LoadRecursive: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("got %d resources, want 1: %+v", len(res), res)
+		}
+		want := cty.StringVal("eu-west1")
+		got := res[0].Attrs["region"]
+		if got == cty.NilVal || !got.Equals(want).True() {
+			t.Errorf("Attrs[region] = %#v, want %#v (override must beat default)", got, want)
+		}
+	})
+
+	t.Run("bool override gates child count conditional", func(t *testing.T) {
+		// Same module called twice: once with enabled=true (resource
+		// survives), once with enabled=false (resource dropped).
+		dir := t.TempDir()
+		root := `module "on" {
+  source  = "./mod"
+  enabled = true
+}
+module "off" {
+  source  = "./mod"
+  enabled = false
+}`
+		if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(root), 0o644); err != nil {
+			t.Fatalf("write root: %v", err)
+		}
+		modDir := filepath.Join(dir, "mod")
+		if err := os.MkdirAll(modDir, 0o755); err != nil {
+			t.Fatalf("mkdir mod: %v", err)
+		}
+		modSrc := `variable "enabled" { type = bool }
+resource "x" "gated" {
+  count = var.enabled ? 1 : 0
+}`
+		if err := os.WriteFile(filepath.Join(modDir, "main.tf"), []byte(modSrc), 0o644); err != nil {
+			t.Fatalf("write mod: %v", err)
+		}
+
+		res, _, diags, err := LoadRecursive(dir)
+		if err != nil {
+			t.Fatalf("LoadRecursive: %v", err)
+		}
+		// A clean count=0 must produce no warnings.
+		for _, d := range diags {
+			if d.Severity == hcl.DiagWarning && d.Summary == "unresolved conditional" {
+				t.Errorf("unexpected unresolved-conditional warning; child should resolve via override: %v", diags)
+			}
+		}
+		// Exactly one survivor: the "on" instantiation.
+		if len(res) != 1 {
+			t.Fatalf("got %d resources, want 1 (only the enabled call site survives): %+v", len(res), res)
+		}
+		got := res[0].ModulePath
+		if len(got) != 1 || got[0] != "on" {
+			t.Errorf("ModulePath = %v, want [on]", got)
+		}
+	})
+
+	t.Run("distinct args produce distinct cached templates", func(t *testing.T) {
+		// The same module is called with two different literal region
+		// values. Each instantiation must reflect its own argument in
+		// the resulting Resource's Attrs.
+		dir := t.TempDir()
+		root := `module "us" {
+  source = "./mod"
+  region = "us-east1"
+}
+module "eu" {
+  source = "./mod"
+  region = "eu-west1"
+}`
+		if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(root), 0o644); err != nil {
+			t.Fatalf("write root: %v", err)
+		}
+		modDir := filepath.Join(dir, "mod")
+		if err := os.MkdirAll(modDir, 0o755); err != nil {
+			t.Fatalf("mkdir mod: %v", err)
+		}
+		modSrc := `variable "region" { default = "default-region" }
+resource "x" "leaf" {
+  region = var.region
+}`
+		if err := os.WriteFile(filepath.Join(modDir, "main.tf"), []byte(modSrc), 0o644); err != nil {
+			t.Fatalf("write mod: %v", err)
+		}
+
+		res, _, _, err := LoadRecursive(dir)
+		if err != nil {
+			t.Fatalf("LoadRecursive: %v", err)
+		}
+		if len(res) != 2 {
+			t.Fatalf("got %d resources, want 2: %+v", len(res), res)
+		}
+		byPath := map[string]cty.Value{}
+		for _, r := range res {
+			byPath[strings.Join(r.ModulePath, "/")] = r.Attrs["region"]
+		}
+		if got, want := byPath["us"], cty.StringVal("us-east1"); got == cty.NilVal || !got.Equals(want).True() {
+			t.Errorf("region for module \"us\" = %#v, want %#v", got, want)
+		}
+		if got, want := byPath["eu"], cty.StringVal("eu-west1"); got == cty.NilVal || !got.Equals(want).True() {
+			t.Errorf("region for module \"eu\" = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("unresolved arg does not override child default", func(t *testing.T) {
+		// The argument expression references a variable with no
+		// default and no override. extractAttrs collapses it to
+		// cty.NilVal; literalOverrides drops it; the child sees only
+		// its own default.
+		dir := t.TempDir()
+		root := `variable "missing" {}
+module "child" {
+  source = "./mod"
+  region = var.missing
+}`
+		if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(root), 0o644); err != nil {
+			t.Fatalf("write root: %v", err)
+		}
+		modDir := filepath.Join(dir, "mod")
+		if err := os.MkdirAll(modDir, 0o755); err != nil {
+			t.Fatalf("mkdir mod: %v", err)
+		}
+		modSrc := `variable "region" { default = "child-default" }
+resource "x" "leaf" {
+  region = var.region
+}`
+		if err := os.WriteFile(filepath.Join(modDir, "main.tf"), []byte(modSrc), 0o644); err != nil {
+			t.Fatalf("write mod: %v", err)
+		}
+
+		res, _, _, err := LoadRecursive(dir)
+		if err != nil {
+			t.Fatalf("LoadRecursive: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("got %d resources, want 1: %+v", len(res), res)
+		}
+		want := cty.StringVal("child-default")
+		got := res[0].Attrs["region"]
+		if got == cty.NilVal || !got.Equals(want).True() {
+			t.Errorf("Attrs[region] = %#v, want %#v (unresolved arg must not override default)", got, want)
+		}
+	})
+
+	t.Run("override flows transitively two levels deep", func(t *testing.T) {
+		// root → a → b. Root supplies `enabled = true` to a; a's own
+		// `module "b"` block forwards `enabled = var.enabled`. b's
+		// resource is gated by `count = var.enabled ? 1 : 0`. The
+		// transitive flow should keep the resource.
+		dir := t.TempDir()
+		rootSrc := `module "a" {
+  source  = "./a"
+  enabled = true
+}`
+		if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(rootSrc), 0o644); err != nil {
+			t.Fatalf("write root: %v", err)
+		}
+		aDir := filepath.Join(dir, "a")
+		if err := os.MkdirAll(aDir, 0o755); err != nil {
+			t.Fatalf("mkdir a: %v", err)
+		}
+		aSrc := `variable "enabled" { type = bool }
+module "b" {
+  source  = "./b"
+  enabled = var.enabled
+}`
+		if err := os.WriteFile(filepath.Join(aDir, "main.tf"), []byte(aSrc), 0o644); err != nil {
+			t.Fatalf("write a: %v", err)
+		}
+		bDir := filepath.Join(aDir, "b")
+		if err := os.MkdirAll(bDir, 0o755); err != nil {
+			t.Fatalf("mkdir b: %v", err)
+		}
+		bSrc := `variable "enabled" { type = bool }
+resource "x" "deep" {
+  count = var.enabled ? 1 : 0
+}`
+		if err := os.WriteFile(filepath.Join(bDir, "main.tf"), []byte(bSrc), 0o644); err != nil {
+			t.Fatalf("write b: %v", err)
+		}
+
+		res, _, _, err := LoadRecursive(dir)
+		if err != nil {
+			t.Fatalf("LoadRecursive: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("got %d resources, want 1 (transitive override should keep it): %+v", len(res), res)
+		}
+		want := []string{"a", "b"}
+		got := res[0].ModulePath
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("ModulePath = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestBuildCacheKey covers the deterministic-key invariant the cache
+// relies on: same (absDir, overrides) → byte-identical key, and
+// distinct override values → distinct keys. Without this, the cache
+// would either collapse semantically distinct call sites or fail to
+// reuse identical ones.
+func TestBuildCacheKey(t *testing.T) {
+	dir := "/tmp/mod"
+
+	// Empty / nil overrides → bare absDir.
+	if got := buildCacheKey(dir, nil); got != dir {
+		t.Errorf("buildCacheKey(dir, nil) = %q, want %q", got, dir)
+	}
+	if got := buildCacheKey(dir, map[string]cty.Value{}); got != dir {
+		t.Errorf("buildCacheKey(dir, empty) = %q, want %q", got, dir)
+	}
+
+	// Same overrides via two different insertion orders must hash to
+	// the same key — this is the determinism invariant the sorted-key
+	// code path defends.
+	a := map[string]cty.Value{"region": cty.StringVal("us"), "enabled": cty.True}
+	b := map[string]cty.Value{"enabled": cty.True, "region": cty.StringVal("us")}
+	if buildCacheKey(dir, a) != buildCacheKey(dir, b) {
+		t.Errorf("buildCacheKey not deterministic across insertion orders: %q vs %q",
+			buildCacheKey(dir, a), buildCacheKey(dir, b))
+	}
+
+	// Distinct values → distinct keys.
+	c := map[string]cty.Value{"region": cty.StringVal("us"), "enabled": cty.True}
+	d := map[string]cty.Value{"region": cty.StringVal("eu"), "enabled": cty.True}
+	if buildCacheKey(dir, c) == buildCacheKey(dir, d) {
+		t.Errorf("buildCacheKey collapsed distinct values: both = %q", buildCacheKey(dir, c))
+	}
+}
+
+// TestLiteralOverrides covers the filter that drops unresolved entries
+// before they reach buildCacheKey / buildEvalContext. Unresolved entries
+// would otherwise either be ignored downstream (wasted work) or, worse,
+// pollute the cache key with non-deterministic GoString output.
+func TestLiteralOverrides(t *testing.T) {
+	if got := literalOverrides(nil); got != nil {
+		t.Errorf("literalOverrides(nil) = %v, want nil", got)
+	}
+	if got := literalOverrides(map[string]cty.Value{}); got != nil {
+		t.Errorf("literalOverrides(empty) = %v, want nil", got)
+	}
+	// All NilVal → nil (so the cache fast path stays active).
+	if got := literalOverrides(map[string]cty.Value{"a": cty.NilVal, "b": cty.NilVal}); got != nil {
+		t.Errorf("literalOverrides(all-nil) = %v, want nil", got)
+	}
+	// Mixed: only the resolved entries survive.
+	got := literalOverrides(map[string]cty.Value{
+		"resolved":   cty.StringVal("ok"),
+		"unresolved": cty.NilVal,
+	})
+	if len(got) != 1 {
+		t.Fatalf("literalOverrides mixed: got %d entries, want 1: %v", len(got), got)
+	}
+	if v, ok := got["resolved"]; !ok || !v.Equals(cty.StringVal("ok")).True() {
+		t.Errorf("literalOverrides mixed: got[resolved] = %v, want StringVal(\"ok\")", v)
+	}
+	if _, ok := got["unresolved"]; ok {
+		t.Errorf("literalOverrides mixed: cty.NilVal entry should have been dropped")
+	}
+}
