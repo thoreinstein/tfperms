@@ -1,4 +1,5 @@
 {
   "walker_error": "no .tf files in \u003cSCENARIO_DIR\u003e",
-  "resources": []
+  "resources": [],
+  "modules": []
 }

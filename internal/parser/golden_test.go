@@ -56,6 +56,18 @@ type goldenDoc struct {
 	ParseError  string        `json:"parse_error,omitempty"`
 	Diagnostics []goldenDiag  `json:"diagnostics,omitempty"`
 	Resources   []goldenResrc `json:"resources"`
+	Modules     []goldenMod   `json:"modules"`
+}
+
+// goldenMod is the serialised projection of a parser.ModuleCall. Args are
+// rendered identically to Resource.Attrs.
+type goldenMod struct {
+	Name       string       `json:"name"`
+	Source     string       `json:"source"`
+	SourceKind string       `json:"source_kind"`
+	File       string       `json:"file"`
+	Line       int          `json:"line"`
+	Args       []goldenAttr `json:"args"`
 }
 
 // goldenDiag is the serialised projection of a single hcl.Diagnostic.
@@ -186,7 +198,10 @@ func runGoldenScenario(t *testing.T, scenarioDir string) {
 // relativisation into two cases.
 func buildGoldenDoc(t *testing.T, scenarioDir string) goldenDoc {
 	t.Helper()
-	doc := goldenDoc{Resources: []goldenResrc{}}
+	doc := goldenDoc{
+		Resources: []goldenResrc{},
+		Modules:   []goldenMod{},
+	}
 
 	absDir, err := filepath.Abs(scenarioDir)
 	if err != nil {
@@ -199,7 +214,7 @@ func buildGoldenDoc(t *testing.T, scenarioDir string) goldenDoc {
 		return doc
 	}
 
-	resources, diags, parseErr := Parse(files)
+	resources, modules, diags, parseErr := Parse(files)
 	if parseErr != nil {
 		doc.ParseError = relativise(parseErr.Error(), absDir)
 		return doc
@@ -212,7 +227,23 @@ func buildGoldenDoc(t *testing.T, scenarioDir string) goldenDoc {
 	for _, r := range resources {
 		doc.Resources = append(doc.Resources, projectResource(r, absDir))
 	}
+
+	for _, m := range modules {
+		doc.Modules = append(doc.Modules, projectModule(m, absDir))
+	}
 	return doc
+}
+
+// projectModule projects a parser.ModuleCall into the goldenMod shape.
+func projectModule(m ModuleCall, absDir string) goldenMod {
+	return goldenMod{
+		Name:       m.Name,
+		Source:     m.Source,
+		SourceKind: m.SourceKind,
+		File:       relativisePath(m.File, absDir),
+		Line:       m.Line,
+		Args:       projectAttrs(m.Args),
+	}
 }
 
 // relativise replaces occurrences of absDir in s with the literal token

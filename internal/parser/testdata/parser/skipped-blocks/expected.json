@@ -21,5 +21,15 @@
       "line": 29,
       "attrs": []
     }
+  ],
+  "modules": [
+    {
+      "name": "m",
+      "source": "./mod",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 17,
+      "args": []
+    }
   ]
 }
