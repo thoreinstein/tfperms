@@ -402,11 +402,33 @@ func extractModule(blk *hcl.Block, evalCtx *hcl.EvalContext) (ModuleCall, hcl.Di
 	}, diags
 }
 
-// errModuleCycle is the sentinel returned by buildModuleTemplate when a
-// recursive module load re-enters a directory that is already being
-// expanded up the call stack. It is intercepted at the call site, where
+// moduleCycleError is returned by buildModuleTemplate when a recursive
+// module load re-enters a directory that is already being expanded up
+// the call stack. The path field captures the cycle sequence — the
+// portion of the recursion stack starting at the first occurrence of
+// the offending directory, with that directory appended again so the
+// closing edge is explicit. It is intercepted at the call site, where
 // it surfaces as a warning diagnostic rather than a hard failure.
-var errModuleCycle = errors.New("module recursion cycle")
+//
+// Example shapes:
+//   - Self-cycle (a module whose source resolves to its own directory):
+//     path = ["/root", "/root"].
+//   - Two-node cycle (root -> a -> root):
+//     path = ["/root", "/root/a", "/root"].
+//   - Three-node cycle (root -> a -> b -> root):
+//     path = ["/root", "/root/a", "/root/a/b", "/root"].
+//
+// The first and last entries are always equal — that equality is what
+// makes a cycle a cycle. Callers that render the path do not need to
+// special-case the duplicate; rendering as "A -> B -> A" already shows
+// the closing edge naturally.
+type moduleCycleError struct {
+	path []string
+}
+
+func (e *moduleCycleError) Error() string {
+	return "module recursion cycle: " + strings.Join(e.path, " -> ")
+}
 
 // moduleTemplate is the parsed-and-recursively-expanded "blueprint" of
 // a single Terraform module directory. Cached entries in LoadRecursive
@@ -474,11 +496,12 @@ func LoadRecursive(dir string) ([]Resource, []ModuleCall, hcl.Diagnostics, error
 		return nil, nil, nil, fmt.Errorf("abs %q: %w", dir, err)
 	}
 	cache := map[string]*moduleTemplate{}
-	inProgress := map[string]bool{}
 	// Root configurations have no propagated arguments; overrides start
 	// at nil and only become non-empty when buildModuleTemplate recurses
 	// into a `module` call site whose Args resolved to literal values.
-	template, walkErr, parseErr := buildModuleTemplate(absDir, nil, cache, inProgress)
+	// The recursion stack starts empty; buildModuleTemplate appends
+	// absDir to it before walking into nested module calls.
+	template, walkErr, parseErr := buildModuleTemplate(absDir, nil, cache, nil)
 	if walkErr != nil {
 		return nil, nil, nil, walkErr
 	}
@@ -510,28 +533,48 @@ func LoadRecursive(dir string) ([]Resource, []ModuleCall, hcl.Diagnostics, error
 //   - (nil, nil, parseErr) — Parse rejected one of the .tf files inside
 //     absDir. Same treatment as walkErr at child / root levels.
 //
-// Cycle detection: re-entering a directory currently up the stack
-// returns (nil, nil, errModuleCycle). The cycle key is the directory
-// path alone — recursing back into a dir with different overrides is
-// still a cycle from a static-evaluation standpoint, and pretending
-// otherwise would let pathological fixtures recurse indefinitely as
-// long as some argument keeps changing.
+// Cycle detection: re-entering a directory currently up the recursion
+// stack returns (nil, nil, *moduleCycleError) carrying the full path
+// sequence — the slice of stack entries from the first occurrence of
+// absDir through the bottom of the stack, with absDir appended again
+// so the closing edge is visible (e.g. ["/root", "/root/a", "/root"]).
+// The cycle key is the directory path alone — recursing back into a
+// dir with different overrides is still a cycle from a static-
+// evaluation standpoint, and pretending otherwise would let
+// pathological fixtures recurse indefinitely as long as some argument
+// keeps changing.
+//
+// The stack is passed by value via a full-slice expression
+// (stack[:len:len]) when descending, so sibling branches each see the
+// stack that prevailed at this level — no shared backing array means a
+// later sibling cannot observe a directory left over from an earlier
+// sibling's recursion. This is what keeps diamond dependency graphs
+// (root -> a -> c, root -> b -> c) from being misclassified as cycles.
 //
 // The cache, however, is keyed by (absDir, overrides) via
 // buildCacheKey: the same module instantiated with two different
 // argument sets must produce two distinct templates so that a
 // `count = var.enabled ? 1 : 0` block resolves to different keep/drop
 // outcomes per call site.
-func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache map[string]*moduleTemplate, inProgress map[string]bool) (*moduleTemplate, error, error) {
+func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache map[string]*moduleTemplate, stack []string) (*moduleTemplate, error, error) {
 	cacheKey := buildCacheKey(absDir, overrides)
 	if t, ok := cache[cacheKey]; ok {
 		return t, nil, nil
 	}
-	if inProgress[absDir] {
-		return nil, nil, errModuleCycle
+	for i, p := range stack {
+		if p == absDir {
+			cycle := make([]string, 0, len(stack)-i+1)
+			cycle = append(cycle, stack[i:]...)
+			cycle = append(cycle, absDir)
+			return nil, nil, &moduleCycleError{path: cycle}
+		}
 	}
-	inProgress[absDir] = true
-	defer delete(inProgress, absDir)
+	// Full-slice expression caps the new slice's capacity at its
+	// length so the append always allocates a fresh backing array.
+	// Without this, two sibling module calls at the same recursion
+	// depth could each append into the parent's spare capacity and
+	// silently overwrite each other's stack entry.
+	childStack := append(stack[:len(stack):len(stack)], absDir)
 
 	files, walkErr := FindTerraformFiles(absDir)
 	if walkErr != nil {
@@ -586,14 +629,18 @@ func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache ma
 		// would surface as an unknown anyway; dropping them keeps the
 		// override map a strict literal-only set.
 		childOverrides := literalOverrides(m.Args)
-		childTmpl, childWalkErr, childParseErr := buildModuleTemplate(childAbs, childOverrides, cache, inProgress)
+		childTmpl, childWalkErr, childParseErr := buildModuleTemplate(childAbs, childOverrides, cache, childStack)
+		var cycleErr *moduleCycleError
 		switch {
-		case errors.Is(childParseErr, errModuleCycle):
+		case errors.As(childParseErr, &cycleErr):
 			tmpl.diags = append(tmpl.diags, &hcl.Diagnostic{
 				Severity: hcl.DiagWarning,
 				Summary:  "module recursion cycle",
-				Detail:   fmt.Sprintf("module %q at %s would re-enter a directory already being expanded; skipping", m.Name, m.Source),
-				Subject:  moduleSubject(m),
+				Detail: fmt.Sprintf(
+					"module %q at %s would re-enter a directory already being expanded; skipping. cycle: %s",
+					m.Name, m.Source, strings.Join(cycleErr.path, " -> "),
+				),
+				Subject: moduleSubject(m),
 			})
 			continue
 		case childWalkErr != nil:
