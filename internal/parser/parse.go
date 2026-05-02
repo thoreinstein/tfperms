@@ -60,6 +60,16 @@ import (
 //     `true`. Anything else — `prevent_destroy = false`, no lifecycle
 //     block, no prevent_destroy attribute, or a non-literal expression
 //     such as `var.lock` — leaves this `false`. v1 non-goal #5.
+//   - ModulePath is the chain of module call names that traverse from
+//     the root configuration down to this resource. Root-level
+//     resources (those declared in the directory passed to
+//     LoadRecursive) have an empty/nil ModulePath. A resource declared
+//     inside `module "foo"` called from the root has
+//     ModulePath = ["foo"]. A resource declared inside `module "bar"`
+//     called from inside `module "foo"` has
+//     ModulePath = ["foo", "bar"]. Plain Parse() never sets this field
+//     — it is populated only by LoadRecursive when it instantiates a
+//     copy of a module's resources at each call site.
 type Resource struct {
 	Kind           string
 	Type           string
@@ -69,6 +79,7 @@ type Resource struct {
 	Attrs          map[string]cty.Value
 	DynamicBlocks  []string
 	PreventDestroy bool
+	ModulePath     []string
 }
 
 // ModuleCall is a single module block extracted from a Terraform configuration.
