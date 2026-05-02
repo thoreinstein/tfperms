@@ -26,13 +26,14 @@ import (
 )
 
 // metaArgs lists attribute names that Terraform treats as meta-arguments
-// on resource and data blocks. Story .5 owns argument extraction; meta-
-// argument routing belongs to story .7. Until that lands we skip these
-// so they do not appear in Resource.Attrs.
+// on resource and data blocks. They are dropped here so they do not
+// appear in Resource.Attrs.
 //
-// `count` and `for_each` are not strictly named in story .5's spec but
-// are meta-arguments per Terraform's documentation; including them here
-// avoids leaking them into Attrs prematurely.
+// `count` and `for_each` are owned by metaargs.go (evalMetaArgs); that
+// routine reads them directly off the block body and decides whether
+// to keep, drop, or warn on the resource. A future refactor that
+// re-routes them through Attrs must coordinate with metaargs.go to
+// avoid double-emitting the same expression.
 var metaArgs = map[string]struct{}{
 	"provider":   {},
 	"depends_on": {},

@@ -407,6 +407,116 @@ func TestParse_VarLocalReferencesResolve(t *testing.T) {
 	}
 }
 
+// TestParse_DropsCountZero defends the Parse → evalMetaArgs wire-up:
+// a literal `count = 0` resource must be dropped from the output and
+// must NOT produce a warning (a clean drop is an answer, not an
+// unknown). The companion resource without count survives.
+func TestParse_DropsCountZero(t *testing.T) {
+	dir := t.TempDir()
+	src := "" +
+		"resource \"x\" \"keep\" {}\n" +
+		"resource \"x\" \"drop\" { count = 0 }\n" +
+		"resource \"x\" \"keep_too\" { count = 1 }\n"
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, diags, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("clean count=0 must produce no warnings; got %v", diags)
+	}
+	wantNames := []string{"keep", "keep_too"}
+	if len(got) != len(wantNames) {
+		t.Fatalf("got %d resources, want %d: %+v", len(got), len(wantNames), got)
+	}
+	for i, w := range wantNames {
+		if got[i].Name != w {
+			t.Errorf("got[%d].Name = %q, want %q", i, got[i].Name, w)
+		}
+	}
+}
+
+// TestParse_UnresolvedCountWarns defends the warning-emission wire-up:
+// a `count = var.unknown` resource is kept (best-effort) and surfaces
+// an "unresolved conditional" warning on the diagnostics return.
+func TestParse_UnresolvedCountWarns(t *testing.T) {
+	dir := t.TempDir()
+	src := `resource "x" "y" { count = var.unknown }`
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, diags, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d resources, want 1 (unresolved must keep): %+v", len(got), got)
+	}
+	if len(diags) == 0 {
+		t.Fatalf("expected at least one diagnostic, got none")
+	}
+	found := false
+	for _, d := range diags {
+		if d.Severity == hcl.DiagWarning && d.Summary == "unresolved conditional" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing 'unresolved conditional' warning; got %v", diags)
+	}
+}
+
+// TestParse_DynamicAndPreventDestroy defends the structural-fields
+// wire-up: dynamic-block labels and lifecycle.prevent_destroy must
+// land on the Resource produced by Parse.
+func TestParse_DynamicAndPreventDestroy(t *testing.T) {
+	dir := t.TempDir()
+	src := `resource "x" "y" {
+  dynamic "rule" {
+    for_each = []
+    content {}
+  }
+  dynamic "tag" {
+    for_each = []
+    content {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}`
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, _, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(got), got)
+	}
+	r := got[0]
+	if !r.PreventDestroy {
+		t.Errorf("PreventDestroy = false, want true")
+	}
+	want := []string{"rule", "tag"}
+	if len(r.DynamicBlocks) != len(want) {
+		t.Fatalf("DynamicBlocks = %v, want %v", r.DynamicBlocks, want)
+	}
+	for i, w := range want {
+		if r.DynamicBlocks[i] != w {
+			t.Errorf("DynamicBlocks[%d] = %q, want %q", i, r.DynamicBlocks[i], w)
+		}
+	}
+}
+
 // TestParse_CycleEmitsWarning proves that locals dependency cycles
 // surface as warning-severity diagnostics on Parse's middle return
 // without escalating to an error. The Resource list is otherwise normal.
