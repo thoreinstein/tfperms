@@ -552,6 +552,43 @@ func TestParse_CycleEmitsWarning(t *testing.T) {
 	}
 }
 
+// TestParse_MetaArgWarningsDeterministic runs the same multi-resource
+// fixture with multiple unresolved meta-args many times and asserts
+// the warning order and content is byte-identical each iteration.
+// Mirrors TestBuildEvalContext_Phase3_DeterministicWarningText for
+// the meta-args side: Epic 6's reporter sorts on (file:line), so the
+// upstream parser must already emit a stable order.
+func TestParse_MetaArgWarningsDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	src := "" +
+		"resource \"x\" \"a\" { count = var.unknown_a }\n" +
+		"resource \"x\" \"b\" { for_each = var.unknown_b }\n" +
+		"resource \"x\" \"c\" { count = var.unknown_c }\n"
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	_, firstDiags, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("first Parse: %v", err)
+	}
+	first := summariseDiags(firstDiags)
+	if first == "" {
+		t.Fatalf("expected diagnostics, got empty summary (%d diags)", len(firstDiags))
+	}
+	for i := 0; i < 20; i++ {
+		_, diags, err := Parse([]string{full})
+		if err != nil {
+			t.Fatalf("iter %d: %v", i, err)
+		}
+		got := summariseDiags(diags)
+		if got != first {
+			t.Fatalf("iter %d diag summary differs:\n got: %q\nfirst: %q", i, got, first)
+		}
+	}
+}
+
 // containsLineMarker checks that msg has a ":<digit>" sequence — the
 // minimum shape that proves a line number was interpolated. We avoid a
 // regex to keep test-only dependencies out of the package.
