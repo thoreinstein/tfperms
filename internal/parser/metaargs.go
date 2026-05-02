@@ -106,7 +106,55 @@ func evalMetaArgs(blk *hcl.Block, evalCtx *hcl.EvalContext) (metaResult, hcl.Dia
 		diags = append(diags, d...)
 	}
 
+	// Walk top-level nested blocks once to capture dynamic-block labels
+	// (in source order) and lifecycle.prevent_destroy. This loop only
+	// inspects the resource body's *immediate* children; nested dynamic
+	// blocks inside a `content { }` body or any other nested block are
+	// deliberately not recursed into. v1 non-goal #1 — keeps the field's
+	// contract honest.
+	for _, nested := range body.Blocks {
+		switch nested.Type {
+		case "lifecycle":
+			res.preventDestroy = literalPreventDestroy(nested.Body)
+		case "dynamic":
+			if len(nested.Labels) >= 1 {
+				res.dynamicLabels = append(res.dynamicLabels, nested.Labels[0])
+			}
+		}
+	}
+
 	return res, diags
+}
+
+// literalPreventDestroy reads the lifecycle block's prevent_destroy
+// attribute and returns true iff it is a literal boolean `true`.
+//
+// Anything else returns false:
+//   - attribute absent
+//   - attribute is `false`
+//   - attribute is a non-bool literal (a string, etc. — Terraform
+//     itself errors here, but we stay best-effort and return false)
+//   - attribute is a reference such as `var.lock` — even if the
+//     reference resolves to true through evalCtx, the spec is explicit
+//     that only literal booleans flip this signal (v1 non-goal #5).
+//     We pass nil eval context to attr.Expr.Value so any traversal
+//     fails immediately rather than picking up a resolved value.
+func literalPreventDestroy(body *hclsyntax.Body) bool {
+	if body == nil {
+		return false
+	}
+	attr, ok := body.Attributes["prevent_destroy"]
+	if !ok {
+		return false
+	}
+	val, diags := attr.Expr.Value(nil)
+	if diags.HasErrors() || !val.IsKnown() || val.IsNull() {
+		return false
+	}
+	if !val.Type().Equals(cty.Bool) {
+		return false
+	}
+	return val.True()
 }
 
 // evalCount evaluates a `count` attribute. Returns (keep, diags):
