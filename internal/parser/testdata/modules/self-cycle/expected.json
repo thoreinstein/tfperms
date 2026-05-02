@@ -1,0 +1,25 @@
+{
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "summary": "module recursion cycle",
+      "detail": "module \"me\" at ./ would re-enter a directory already being expanded; skipping. cycle: \u003cSCENARIO_DIR\u003e -\u003e \u003cSCENARIO_DIR\u003e",
+      "subject": {
+        "file": "main.tf",
+        "line": 1,
+        "col": 1
+      }
+    }
+  ],
+  "resources": [],
+  "modules": [
+    {
+      "name": "me",
+      "source": "./",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": []
+    }
+  ]
+}
