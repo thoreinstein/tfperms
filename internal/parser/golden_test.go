@@ -327,15 +327,23 @@ func relativisePath(p, absDir string) string {
 }
 
 // projectDiag projects an *hcl.Diagnostic into the goldenDiag shape,
-// relativising the Subject's filename. Diagnostics with a nil Subject
-// (rare; surfaces for synthetic diagnostics that have no source range)
-// produce a goldenDiag with Subject left nil so `omitempty` drops the
-// field from the document.
+// relativising the Subject's filename and the Detail string.
+// Diagnostics with a nil Subject (rare; surfaces for synthetic
+// diagnostics that have no source range) produce a goldenDiag with
+// Subject left nil so `omitempty` drops the field from the document.
+//
+// Detail is routed through relativise so cycle warnings, which embed
+// absolute directory paths in the form
+// "/abs/path/A -> /abs/path/A/b -> /abs/path/A", surface in goldens
+// with <SCENARIO_DIR> in place of the absolute prefix. Without this,
+// a self-cycle or multi-hop cycle fixture would render an
+// OS-specific path in expected.json and break byte-identity across
+// machines.
 func projectDiag(d *hcl.Diagnostic, absDir string) goldenDiag {
 	out := goldenDiag{
 		Severity: severityName(d.Severity),
 		Summary:  d.Summary,
-		Detail:   d.Detail,
+		Detail:   relativise(d.Detail, absDir),
 	}
 	if d.Subject != nil {
 		out.Subject = &goldenRange{

@@ -1,0 +1,44 @@
+{
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"consul\": tfperms does not parse non-local source \"hashicorp/consul/aws\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 1,
+        "col": 1
+      }
+    }
+  ],
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "root",
+      "file": "main.tf",
+      "line": 6,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "registry-root"
+        }
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "consul",
+      "source": "hashicorp/consul/aws",
+      "source_kind": "registry",
+      "file": "main.tf",
+      "line": 1,
+      "args": [
+        {
+          "name": "version",
+          "value": "0.1.0"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"far\": tfperms does not parse non-local source \"hashicorp/consul/aws\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 5,
+        "col": 1
+      }
+    }
+  ],
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_compute_instance",
+      "name": "vm",
+      "file": "local/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "mixed-tree-local"
+        }
+      ],
+      "module_path": [
+        "near"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "near",
+      "source": "./local",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": []
+    },
+    {
+      "name": "far",
+      "source": "hashicorp/consul/aws",
+      "source_kind": "registry",
+      "file": "main.tf",
+      "line": 5,
+      "args": [
+        {
+          "name": "version",
+          "value": "0.1.0"
+        }
+      ]
+    }
+  ]
+}

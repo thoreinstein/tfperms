@@ -1,0 +1,39 @@
+{
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "summary": "non-local module source",
+      "detail": "module \"from_git\": tfperms does not parse non-local source \"git::https://github.com/org/repo.git\"",
+      "subject": {
+        "file": "main.tf",
+        "line": 1,
+        "col": 1
+      }
+    }
+  ],
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "root",
+      "file": "main.tf",
+      "line": 5,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "git-root"
+        }
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "from_git",
+      "source": "git::https://github.com/org/repo.git",
+      "source_kind": "git",
+      "file": "main.tf",
+      "line": 1,
+      "args": []
+    }
+  ]
+}
