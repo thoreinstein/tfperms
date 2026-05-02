@@ -160,7 +160,7 @@ func TestBuildEvalContext_Phase1(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			files := parseFiles(t, tc.files, tc.order)
-			ctx, diags := buildEvalContext(files)
+			ctx, diags := buildEvalContext(files, nil)
 			if len(diags) != 0 {
 				t.Errorf("phase 1 should produce no diagnostics; got %v", diags)
 			}
@@ -306,7 +306,7 @@ func TestBuildEvalContext_Phase2(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			files := parseFiles(t, tc.files, tc.order)
-			ctx, diags := buildEvalContext(files)
+			ctx, diags := buildEvalContext(files, nil)
 			if len(diags) != 0 {
 				t.Errorf("phase 2 fixture should produce no diagnostics; got %v", diags)
 			}
@@ -430,7 +430,7 @@ func TestBuildEvalContext_Phase3_Cycles(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			files := parseFiles(t, tc.files, tc.order)
-			ctx, diags := buildEvalContext(files)
+			ctx, diags := buildEvalContext(files, nil)
 
 			// Warning count must match wantCycles exactly.
 			gotCycles := extractCycleMembers(diags)
@@ -483,7 +483,7 @@ func TestBuildEvalContext_Phase3_PathologicalTermination(t *testing.T) {
 			"}\n",
 	}, []string{"big.tf"})
 
-	ctx, diags := buildEvalContext(files)
+	ctx, diags := buildEvalContext(files, nil)
 
 	// Literals + var-refs + chain must resolve.
 	for name, want := range map[string]cty.Value{
@@ -529,10 +529,10 @@ func TestBuildEvalContext_Phase3_DeterministicWarningText(t *testing.T) {
 			"}\n",
 	}, []string{"f.tf"})
 
-	_, firstDiags := buildEvalContext(files)
+	_, firstDiags := buildEvalContext(files, nil)
 	first := summariseDiags(firstDiags)
 	for i := 0; i < 20; i++ {
-		_, diags := buildEvalContext(files)
+		_, diags := buildEvalContext(files, nil)
 		got := summariseDiags(diags)
 		if got != first {
 			t.Fatalf("iter %d diag summary differs: %q vs %q", i, got, first)
@@ -600,9 +600,9 @@ func TestBuildEvalContext_Phase2_Deterministic(t *testing.T) {
 			"}\n",
 	}, []string{"f.tf"})
 
-	first, _ := buildEvalContext(files)
+	first, _ := buildEvalContext(files, nil)
 	for i := 0; i < 20; i++ {
-		got, _ := buildEvalContext(files)
+		got, _ := buildEvalContext(files, nil)
 		for _, name := range []string{"a", "b", "c"} {
 			f := localValue(first, name)
 			g := localValue(got, name)
@@ -610,5 +610,134 @@ func TestBuildEvalContext_Phase2_Deterministic(t *testing.T) {
 				t.Fatalf("iter %d local.%s: got %#v, want %#v", i, name, g, f)
 			}
 		}
+	}
+}
+
+// TestBuildEvalContext_Overrides covers the variable-override path used
+// by LoadRecursive to propagate literal module arguments down into a
+// child module's eval context. The cases assert four invariants:
+//   - Override beats default when both are present.
+//   - Override resolves a declared-without-default variable that would
+//     otherwise be absent.
+//   - Override for an undeclared name is silently dropped (best-effort
+//     filter; mirrors the rest of buildEvalContext's contract).
+//   - cty.NilVal in the override map is treated as "no override" and
+//     falls through to the default — propagating a NilVal would
+//     otherwise pollute the var object with an unknown.
+func TestBuildEvalContext_Overrides(t *testing.T) {
+	cases := []struct {
+		name      string
+		files     map[string]string
+		order     []string
+		overrides map[string]cty.Value
+		assertVar map[string]cty.Value
+		absentVar []string
+	}{
+		{
+			name: "override beats literal default",
+			files: map[string]string{
+				"v.tf": `variable "region" { default = "us-east1" }`,
+			},
+			order:     []string{"v.tf"},
+			overrides: map[string]cty.Value{"region": cty.StringVal("eu-west1")},
+			assertVar: map[string]cty.Value{"region": cty.StringVal("eu-west1")},
+		},
+		{
+			name: "override resolves declared-without-default variable",
+			files: map[string]string{
+				"v.tf": `variable "enabled" { type = bool }`,
+			},
+			order:     []string{"v.tf"},
+			overrides: map[string]cty.Value{"enabled": cty.True},
+			assertVar: map[string]cty.Value{"enabled": cty.True},
+		},
+		{
+			name: "override for undeclared variable is dropped",
+			files: map[string]string{
+				"v.tf": `variable "declared" { default = "ok" }`,
+			},
+			order:     []string{"v.tf"},
+			overrides: map[string]cty.Value{"undeclared": cty.StringVal("x")},
+			assertVar: map[string]cty.Value{"declared": cty.StringVal("ok")},
+			absentVar: []string{"undeclared"},
+		},
+		{
+			name: "NilVal override falls through to default",
+			files: map[string]string{
+				"v.tf": `variable "region" { default = "us-east1" }`,
+			},
+			order:     []string{"v.tf"},
+			overrides: map[string]cty.Value{"region": cty.NilVal},
+			assertVar: map[string]cty.Value{"region": cty.StringVal("us-east1")},
+		},
+		{
+			name: "nil override map preserves default-only resolution",
+			files: map[string]string{
+				"v.tf": `variable "region" { default = "us-east1" }`,
+			},
+			order:     []string{"v.tf"},
+			overrides: nil,
+			assertVar: map[string]cty.Value{"region": cty.StringVal("us-east1")},
+		},
+		{
+			name: "override does not appear when variable not declared and no default",
+			files: map[string]string{
+				"v.tf": `# no variable blocks`,
+			},
+			order:     []string{"v.tf"},
+			overrides: map[string]cty.Value{"phantom": cty.StringVal("nope")},
+			absentVar: []string{"phantom"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := parseFiles(t, tc.files, tc.order)
+			ctx, diags := buildEvalContext(files, tc.overrides)
+			if len(diags) != 0 {
+				t.Errorf("override path should produce no diagnostics; got %v", diags)
+			}
+			for name, want := range tc.assertVar {
+				if !hasVar(ctx, name) {
+					t.Errorf("var.%s missing; want %#v", name, want)
+					continue
+				}
+				if got := varValue(ctx, name); !ctyValuesEqual(got, want) {
+					t.Errorf("var.%s = %#v, want %#v", name, got, want)
+				}
+			}
+			for _, name := range tc.absentVar {
+				if hasVar(ctx, name) {
+					t.Errorf("var.%s present (=%#v); want absent", name, varValue(ctx, name))
+				}
+			}
+		})
+	}
+}
+
+// TestBuildEvalContext_OverridesAffectLocals proves the override flows
+// transitively into local resolution: a `locals { copy = var.X }` block
+// resolves against the overridden value, not the default. This is the
+// path that lets a module's count/for_each conditional resolve when its
+// guarding variable is propagated from the caller.
+func TestBuildEvalContext_OverridesAffectLocals(t *testing.T) {
+	files := parseFiles(t, map[string]string{
+		"f.tf": "" +
+			"variable \"region\" { default = \"us-east1\" }\n" +
+			"locals { copy = var.region }\n",
+	}, []string{"f.tf"})
+
+	ctx, diags := buildEvalContext(files, map[string]cty.Value{
+		"region": cty.StringVal("eu-west1"),
+	})
+	if len(diags) != 0 {
+		t.Errorf("unexpected diagnostics: %v", diags)
+	}
+	want := cty.StringVal("eu-west1")
+	if got := varValue(ctx, "region"); !ctyValuesEqual(got, want) {
+		t.Errorf("var.region = %#v, want %#v", got, want)
+	}
+	if got := localValue(ctx, "copy"); !ctyValuesEqual(got, want) {
+		t.Errorf("local.copy = %#v, want %#v (locals must see overridden var)", got, want)
 	}
 }

@@ -276,7 +276,10 @@ func Parse(files []string) ([]Resource, []ModuleCall, hcl.Diagnostics, error) {
 	// can iterate per-file *hclsyntax.Body — MergeFiles returns an opaque
 	// merged body that cannot be cast back, and we want per-file Subject
 	// ranges on cycle warnings.
-	evalCtx, evalDiags := buildEvalContext(parsed)
+	//
+	// Plain Parse never propagates module arguments — only LoadRecursive's
+	// recursive walk does — so the override map is nil here.
+	evalCtx, evalDiags := buildEvalContext(parsed, nil)
 
 	// MergeFiles unifies the bodies into a single hcl.Body the schema-based
 	// extractor can iterate once. The returned body is an internal
