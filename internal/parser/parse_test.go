@@ -632,10 +632,24 @@ func TestClassifySource(t *testing.T) {
 		// Private registry: <hostname>/<namespace>/<name>/<provider>.
 		// First segment contains a "." → hostname → registry.
 		{"app.terraform.io/example-corp/k8s-cluster/azurerm", SourceRegistry},
+		// Regression: hostname embeds ".git" (e.g. registry.gitlab.*)
+		// must not trip the git heuristic — a bare strings.Contains
+		// check would misclassify these as SourceGit. The "." character
+		// after .git is a hostname continuation, not a path boundary.
+		{"registry.gitlab.example.com/ns/name/provider", SourceRegistry},
+		{"app.gitsomething.io/ns/name/provider", SourceRegistry},
 		// 4 segments but no hostname dot → not a registry path.
 		{"a/b/c/d", SourceUnknown},
 		{"git::https://example.com/repo.git", SourceGit},
 		{"git@github.com:foo/bar.git", SourceGit},
+		// .git as suffix, with subdir ("//"), with query, with fragment.
+		{"github.com/hashicorp/terraform.git", SourceGit},
+		{"github.com/hashicorp/terraform.git//modules/vpc", SourceGit},
+		{"github.com/hashicorp/terraform.git?ref=v1.2.0", SourceGit},
+		{"github.com/hashicorp/terraform.git#main", SourceGit},
+		// Hostname contains ".git" but the actual repo path also ends
+		// in ".git" — suffix check wins, classified as git.
+		{"host.gitlab.com/user/repo.git", SourceGit},
 		{"https://example.com/module.zip", SourceArchive},
 		{"http://example.com/m.tar.gz", SourceArchive},
 		{"just-a-string", SourceUnknown},

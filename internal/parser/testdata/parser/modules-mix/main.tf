@@ -12,6 +12,10 @@ module "private_registry" {
   source = "app.terraform.io/example-corp/k8s-cluster/azurerm"
 }
 
+module "registry_with_git_in_hostname" {
+  source = "registry.gitlab.example.com/ns/name/provider"
+}
+
 module "git" {
   source = "git::https://example.com/repo.git"
 }
