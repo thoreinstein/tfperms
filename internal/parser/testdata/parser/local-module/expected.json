@@ -1,0 +1,48 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "root_bucket",
+      "file": "main.tf",
+      "line": 6,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "at-root"
+        }
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_compute_instance",
+      "name": "leaf",
+      "file": "mod/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "in-mod"
+        }
+      ],
+      "module_path": [
+        "child"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "child",
+      "source": "./mod",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": [
+        {
+          "name": "env",
+          "value": "prod"
+        }
+      ]
+    }
+  ]
+}

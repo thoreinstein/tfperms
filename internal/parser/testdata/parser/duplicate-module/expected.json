@@ -1,0 +1,64 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "shared",
+      "file": "mod/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "shared-bucket"
+        }
+      ],
+      "module_path": [
+        "first"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "shared",
+      "file": "mod/main.tf",
+      "line": 1,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "shared-bucket"
+        }
+      ],
+      "module_path": [
+        "second"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "first",
+      "source": "./mod",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": [
+        {
+          "name": "name",
+          "value": "first-instance"
+        }
+      ]
+    },
+    {
+      "name": "second",
+      "source": "./mod",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 6,
+      "args": [
+        {
+          "name": "name",
+          "value": "second-instance"
+        }
+      ]
+    }
+  ]
+}
