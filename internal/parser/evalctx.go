@@ -7,11 +7,20 @@ package parser
 // populated *hcl.EvalContext suitable for resolving `var.X` and `local.X`
 // references in resource/data attribute expressions.
 //
-// Phase 1 (this file) only handles literal-only resolution: variable
-// defaults and locals expressions are each evaluated against a nil
-// context, so literals succeed and any reference (var.X / local.X) or
-// function call fails and is absent from the resulting context. Later
-// phases extend this with iterative resolution and cycle detection.
+// Resolution is iterative and best-effort:
+//   - Variable defaults are evaluated against a nil context. Literal
+//     defaults succeed; defaults that reference functions or other
+//     variables fail and are absent from the resulting context. This
+//     mirrors Terraform's own contract: variable defaults may not refer
+//     to other variables or to locals.
+//   - Locals are then resolved in passes over the collected expressions.
+//     Each pass evaluates any local whose dependencies are satisfied by
+//     the growing context. The loop terminates when a pass adds no new
+//     resolutions.
+//   - Locals still unresolved after fixed-point either belong to a
+//     dependency cycle (flagged by phase 3) or depend on something we
+//     cannot resolve (functions, missing variables, cross-resource
+//     references). Both cases are silently absent from the context.
 //
 // Type fidelity is *not* preserved: a `variable "x" { type = number;
 // default = "5" }` block is captured as cty.StringVal("5"), not coerced
@@ -20,6 +29,8 @@ package parser
 // it themselves.
 
 import (
+	"sort"
+
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
@@ -60,7 +71,7 @@ type localDecl struct {
 // bindings, and returns an *hcl.EvalContext populated with `var` and
 // `local` object values plus any warning-severity diagnostics. The
 // returned context is always non-nil; the diagnostics slice may be
-// empty (and is always empty in this phase).
+// empty.
 func buildEvalContext(files []*hcl.File) (*hcl.EvalContext, hcl.Diagnostics) {
 	varExprs, localDecls := collectDecls(files)
 
@@ -75,26 +86,61 @@ func buildEvalContext(files []*hcl.File) (*hcl.EvalContext, hcl.Diagnostics) {
 		varValues[name] = val
 	}
 
-	// Resolve locals against a nil context too. Phase 1 only catches
-	// literal locals; phase 2 extends this with iterative resolution
-	// against the populated context.
-	localValues := make(map[string]cty.Value, len(localDecls))
-	for name, d := range localDecls {
-		val, diags := d.expr.Value(nil)
-		if diags.HasErrors() || !val.IsKnown() {
-			continue
-		}
-		localValues[name] = val
-	}
-
 	ctx := &hcl.EvalContext{Variables: map[string]cty.Value{}}
 	// cty.ObjectVal panics on an empty map, so guard with len(...) > 0.
 	if len(varValues) > 0 {
 		ctx.Variables["var"] = cty.ObjectVal(varValues)
 	}
-	if len(localValues) > 0 {
-		ctx.Variables["local"] = cty.ObjectVal(localValues)
+
+	// Iteratively resolve locals against the growing context. Each pass
+	// tries every still-unresolved local in alphabetical order; on
+	// success the result is folded into ctx.Variables["local"] for the
+	// next pass. The loop terminates when a pass makes no progress.
+	resolved := make(map[string]cty.Value, len(localDecls))
+	unresolved := make(map[string]hcl.Expression, len(localDecls))
+	for name, d := range localDecls {
+		unresolved[name] = d.expr
 	}
+
+	for {
+		progress := false
+		// Sort names per pass so iteration is deterministic regardless
+		// of map order. cty.ObjectVal itself does not depend on insertion
+		// order, but resolving in a stable order keeps the unresolved
+		// set deterministic too.
+		names := make([]string, 0, len(unresolved))
+		for n := range unresolved {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			val, diags := unresolved[name].Value(ctx)
+			if diags.HasErrors() || !val.IsKnown() {
+				continue
+			}
+			resolved[name] = val
+			delete(unresolved, name)
+			progress = true
+		}
+
+		// Rebuild the local object exposed to the next pass. Rebuilding
+		// each iteration (not just at exit) lets multi-hop dependency
+		// chains converge in O(depth) passes instead of O(depth^2).
+		if len(resolved) > 0 {
+			ctx.Variables["local"] = cty.ObjectVal(resolved)
+		}
+
+		if !progress {
+			break
+		}
+	}
+
+	// Anything still in `unresolved` is either part of a cycle (flagged
+	// by phase 3) or depends on something outside our reach (a function
+	// call, an undefined var, a cross-resource reference). Both cases
+	// are silently absent from the context for now.
+	_ = unresolved
 	return ctx, nil
 }
 
