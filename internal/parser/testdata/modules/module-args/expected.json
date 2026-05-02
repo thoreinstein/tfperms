@@ -1,0 +1,35 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "gated",
+      "file": "mod/main.tf",
+      "line": 5,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "module-args-gated"
+        }
+      ],
+      "module_path": [
+        "child"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "child",
+      "source": "./mod",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": [
+        {
+          "name": "enabled",
+          "value": true
+        }
+      ]
+    }
+  ]
+}
