@@ -87,7 +87,11 @@ func Load() (*Catalog, error) {
 func LoadFS(fsys fs.FS, dir string) (*Catalog, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read dir %q: %v", ErrCatalog, dir, err)
+		// Double %w: keep ErrCatalog discoverable via errors.Is and
+		// preserve the underlying fs error (e.g. fs.ErrNotExist) in the
+		// chain so callers can use errors.Is/errors.As on it. The
+		// package doc on ErrCatalog promises this contract.
+		return nil, fmt.Errorf("%w: read dir %q: %w", ErrCatalog, dir, err)
 	}
 
 	files := make([]string, 0, len(entries))
@@ -117,7 +121,7 @@ func LoadFS(fsys fs.FS, dir string) (*Catalog, error) {
 	for _, name := range files {
 		data, err := fs.ReadFile(fsys, path.Join(dir, name))
 		if err != nil {
-			return nil, fmt.Errorf("%w: read %q: %v", ErrCatalog, name, err)
+			return nil, fmt.Errorf("%w: read %q: %w", ErrCatalog, name, err)
 		}
 		if err := mergeFile(cat, firstSeen, name, data); err != nil {
 			return nil, err
@@ -142,7 +146,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true) // reject unknown top-level keys (e.g. "resource:" instead of "resources:")
 	if err := dec.Decode(&raw); err != nil {
-		return fmt.Errorf("%w: parse %q: %v", ErrCatalog, file, err)
+		return fmt.Errorf("%w: parse %q: %w", ErrCatalog, file, err)
 	}
 
 	// resources
@@ -160,7 +164,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 
 		entry := &ResourceEntry{}
 		if err := strictDecodeNode(&node, entry); err != nil {
-			return fmt.Errorf("%w: decode resources/%s in %s: %v", ErrCatalog, typ, file, err)
+			return fmt.Errorf("%w: decode resources/%s in %s: %w", ErrCatalog, typ, file, err)
 		}
 		entry.Type = typ
 		entry.Position = pos
@@ -183,7 +187,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 
 		entry := &DataSourceEntry{}
 		if err := strictDecodeNode(&node, entry); err != nil {
-			return fmt.Errorf("%w: decode data_sources/%s in %s: %v", ErrCatalog, typ, file, err)
+			return fmt.Errorf("%w: decode data_sources/%s in %s: %w", ErrCatalog, typ, file, err)
 		}
 		entry.Type = typ
 		entry.Position = pos
@@ -206,7 +210,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 
 		entry := &IAMBindingEntry{}
 		if err := strictDecodeNode(&node, entry); err != nil {
-			return fmt.Errorf("%w: decode iam_bindings/%s in %s: %v", ErrCatalog, typ, file, err)
+			return fmt.Errorf("%w: decode iam_bindings/%s in %s: %w", ErrCatalog, typ, file, err)
 		}
 		entry.Type = typ
 		entry.Position = pos

@@ -2,9 +2,12 @@ package catalog
 
 import (
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestLoadMergesFiles confirms that LoadFS reads every *.yaml file in
@@ -431,5 +434,106 @@ resources:
 				t.Errorf("error missing typo %q: %v", tc.typoIn, err)
 			}
 		})
+	}
+}
+
+// TestLoadPreservesUnderlyingErrorChain is the regression test for the
+// review feedback that called out using %v instead of %w on the underlying
+// I/O and decode errors. The package doc on ErrCatalog promises callers
+// can use errors.Is to inspect both the catalog category AND the
+// underlying error; if anyone re-introduces %v formatting on those
+// fmt.Errorf calls, the underlying error gets stripped from the chain
+// and these assertions fail.
+//
+// Two cases:
+//
+//   - Missing directory: the fs.ReadDir error path. fs.ErrNotExist is the
+//     canonical sentinel and gives us a direct errors.Is target.
+//   - Malformed YAML inside a file: the per-file decode path. yaml.v3
+//     does not export a parse-error sentinel, so we use errors.As against
+//     *yaml.TypeError plus a chain-walker that handles Go 1.20's
+//     multi-%w wrapping (which exposes Unwrap() []error, not
+//     Unwrap() error).
+func TestLoadPreservesUnderlyingErrorChain(t *testing.T) {
+	t.Run("missing directory wraps fs.ErrNotExist", func(t *testing.T) {
+		// fstest.MapFS returns fs.ErrNotExist for ReadDir on an unknown
+		// path; the loader must propagate that error in the chain so a
+		// caller can errors.Is it. This single assertion is the contract
+		// the %v → %w fix exists to satisfy.
+		emptyFS := fstest.MapFS{}
+		_, err := LoadFS(emptyFS, "does-not-exist")
+		if err == nil {
+			t.Fatal("expected error for missing directory, got nil")
+		}
+		if !errors.Is(err, ErrCatalog) {
+			t.Errorf("error not wrapped with ErrCatalog: %v", err)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("error chain dropped fs.ErrNotExist; %%v formatting may have been re-introduced: %v", err)
+		}
+	})
+
+	t.Run("malformed YAML preserves underlying decode error in chain", func(t *testing.T) {
+		// A tab in YAML indentation triggers a yaml.v3 parser error;
+		// the loader must keep that error in the chain. yaml.v3 does
+		// not expose its parser errors as a public sentinel, so we
+		// assert structurally: at least one link in the chain other
+		// than ErrCatalog must exist. With %v formatting only
+		// ErrCatalog would be reachable.
+		mfs := fstest.MapFS{
+			"broken.yaml": &fstest.MapFile{Data: []byte("resources:\n\tgoogle_x: {}\n")},
+		}
+		_, err := LoadFS(mfs, ".")
+		if err == nil {
+			t.Fatal("expected parse error, got nil")
+		}
+		if !errors.Is(err, ErrCatalog) {
+			t.Errorf("error not wrapped with ErrCatalog: %v", err)
+		}
+		if !hasNonCatalogCause(err) {
+			t.Errorf("error chain only contains ErrCatalog; underlying YAML error was lost: %v", err)
+		}
+		// Best-effort: when yaml.v3 produces a TypeError, errors.As
+		// should reach it through the chain. Not all parser-level
+		// errors surface as *yaml.TypeError, so this is informative
+		// rather than a hard assertion.
+		var typeErr *yaml.TypeError
+		_ = errors.As(err, &typeErr)
+	})
+}
+
+// hasNonCatalogCause reports whether err's tree contains any error other
+// than ErrCatalog. fmt.Errorf with multiple %w verbs produces an error
+// whose Unwrap method returns []error (Go 1.20+), so we recurse with the
+// multi-wrap-aware visitor pattern rather than calling errors.Unwrap in a
+// loop (which only handles the single-wrap form and would miss the
+// second %w branch entirely).
+func hasNonCatalogCause(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ErrCatalog { //nolint:errorlint // sentinel identity check, not a wrap traversal
+		return false
+	}
+	switch u := err.(type) { //nolint:errorlint // we are walking the wrap tree, not asking errors.As
+	case interface{ Unwrap() error }:
+		inner := u.Unwrap()
+		if inner == nil {
+			// Leaf error that is not ErrCatalog — that is the
+			// underlying cause we want to see.
+			return true
+		}
+		return hasNonCatalogCause(inner)
+	case interface{ Unwrap() []error }:
+		for _, child := range u.Unwrap() {
+			if hasNonCatalogCause(child) {
+				return true
+			}
+		}
+		return false
+	default:
+		// A leaf error that is not ErrCatalog (handled above) — that
+		// is by definition a non-catalog cause.
+		return true
 	}
 }
