@@ -16,7 +16,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test lint tidy-check release-snapshot
+.PHONY: help build test lint tidy-check catalog-validate release-snapshot
 
 help: ## Show this help message
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -29,6 +29,9 @@ test: ## Run the full test suite
 
 lint: ## Run golangci-lint with .golangci.yml
 	golangci-lint run
+
+catalog-validate: ## Assert that the committed catalog satisfies all schema and provenance rules
+	go test ./internal/catalog -run TestCatalogValid
 
 release-snapshot: ## Build a local snapshot release via goreleaser
 	goreleaser release --snapshot --clean

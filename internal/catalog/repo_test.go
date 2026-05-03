@@ -10,12 +10,19 @@ import (
 	catalogdata "github.com/thoreinstein/tfperms/catalog"
 )
 
-// TestRepositoryCatalogIsValid loads the actual embedded catalog
-// (everything currently committed under catalog/*.yaml) and asserts
-// the validator accepts every entry. It is the consistency gate for
-// catalog contributions: any future PR adding or modifying a YAML
-// entry has to pass this test, which means no schema-violating entry
-// can land via the normal review process.
+// TestCatalogValid loads the actual embedded catalog (everything
+// currently committed under catalog/*.yaml) and asserts the validator
+// accepts every entry. It is the consistency gate for catalog
+// contributions: any future PR adding or modifying a YAML entry has to
+// pass this test, which means no schema-violating entry can land via
+// the normal review process.
+//
+// This is the single test exposed by `make catalog-validate`. Naming
+// it TestCatalogValid (rather than the older TestRepositoryCatalogIsValid)
+// matches the make target's `-run` filter so the developer-facing
+// command and the test it runs use the same vocabulary. The other
+// TestRepositoryCatalog* tests in this file remain repository-level
+// invariants and run as part of the normal `go test ./...` suite.
 //
 // This test is intentionally separate from TestLoadProductionEmbed
 // (in loader_test.go) which is a smoke test — that test only checks
@@ -29,7 +36,7 @@ import (
 // no longer satisfy it. The fix is to either relax the validator (if
 // the new rule was wrong) or update the offending YAML entry to
 // satisfy it (if the rule was right).
-func TestRepositoryCatalogIsValid(t *testing.T) {
+func TestCatalogValid(t *testing.T) {
 	cat, err := Load()
 	if err != nil {
 		t.Fatalf("Load() rejected committed catalog: %v", err)
@@ -49,10 +56,10 @@ func TestRepositoryCatalogIsValid(t *testing.T) {
 // TestRepositoryCatalogIAMBindingsResolve confirms every IAM binding
 // in the committed catalog points at a parent_resource that is also
 // committed. The validator already enforces this at load time, so
-// TestRepositoryCatalogIsValid would catch the same condition. The
-// reason this dedicated assertion exists is documentation: when this
-// test fails the message is unambiguous about what went wrong, which
-// cuts the time to a fix on a contributor's first attempt.
+// TestCatalogValid would catch the same condition. The reason this
+// dedicated assertion exists is documentation: when this test fails
+// the message is unambiguous about what went wrong, which cuts the
+// time to a fix on a contributor's first attempt.
 func TestRepositoryCatalogIAMBindingsResolve(t *testing.T) {
 	cat, err := Load()
 	if err != nil {
