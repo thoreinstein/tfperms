@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -473,6 +474,116 @@ data_sources:
 				t.Errorf("error missing typo %q: %v", tc.typoIn, err)
 			}
 		})
+	}
+}
+
+// TestLoadIgnoresYmlExtension confirms the loader rejects the .yml
+// extension. catalog/embed.go's //go:embed *.yaml pattern only matches
+// .yaml; if the loader accepted .yml, a contributor's local file would
+// pass tests and validate via the disk loader but silently vanish from
+// the embedded production binary. The two sides MUST stay in lockstep,
+// and this test fails loudly if anyone broadens the loader filter to
+// include .yml without also broadening the embed pattern.
+func TestLoadIgnoresYmlExtension(t *testing.T) {
+	mfs := fstest.MapFS{
+		"only.yml": &fstest.MapFile{Data: []byte(`
+resources:
+  google_storage_bucket:
+` + validProvenance + `    permissions:
+      plan: [storage.buckets.get]
+`)},
+	}
+	cat, err := LoadFS(mfs, ".")
+	if err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	if _, ok := cat.Resources["google_storage_bucket"]; ok {
+		t.Errorf("loader read a .yml file; expected it to be ignored to stay aligned with //go:embed *.yaml")
+	}
+	if len(cat.Resources)+len(cat.DataSources)+len(cat.IAMBindings) != 0 {
+		t.Errorf("expected empty catalog (only file is .yml), got %+v", cat)
+	}
+}
+
+// TestLoadStrictDecodeErrorAnchorsToSourceLine is the regression test
+// for the strict-decode path's diagnostic. strictDecodeNode round-trips
+// each entry through yaml.Marshal + yaml.NewDecoder so KnownFields(true)
+// engages, but yaml.v3's TypeError then reports unknown fields with a
+// line number relative to the marshaled fragment ("line 1: ...") rather
+// than the original catalog file. rewriteStrictDecodeErr strips that
+// fragment-relative prefix and replaces it with the entry's Position.
+//
+// The fixture deliberately pads the file so the offending entry does
+// not start on line 1 — that is the only way to tell a fragment-line
+// regression apart from a correctly-anchored one. If anyone reverts the
+// rewrite, the assertions below catch it: the error would say "line 1"
+// instead of the real source line.
+func TestLoadStrictDecodeErrorAnchorsToSourceLine(t *testing.T) {
+	// Layout (1-indexed):
+	//   1: <blank>
+	//   2: <blank>
+	//   3: <blank>
+	//   4: resources:
+	//   5:   google_storage_bucket:    ← scalar key
+	//   6:     verifcation:            ← typo; also where Position.Line lands
+	//   ...
+	//
+	// yaml.v3 stamps a mapping value node's .Line at the first child of
+	// the mapping (line 6 here), not at the parent scalar key (line 5).
+	// rawFile decodes Resources as map[string]yaml.Node, so the Position
+	// the loader records for `google_storage_bucket` is line 6. The test
+	// asserts that exact value to lock in the contract — if rawFile is
+	// ever changed to decode into a node that points at the parent key
+	// instead, this number must change with it.
+	const wantEntryLine = 6
+	mfs := fstest.MapFS{
+		"storage.yaml": &fstest.MapFile{Data: []byte(`
+
+
+resources:
+  google_storage_bucket:
+    verifcation:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+`)},
+	}
+
+	_, err := LoadFS(mfs, ".")
+	if err == nil {
+		t.Fatal("expected strict-mode error for misspelled nested field, got nil")
+	}
+	if !errors.Is(err, ErrCatalog) {
+		t.Errorf("error not wrapped with ErrCatalog: %v", err)
+	}
+	msg := err.Error()
+
+	// The typo string must survive rewriting — that is the actionable
+	// detail a contributor uses to fix the typo.
+	if !strings.Contains(msg, "verifcation") {
+		t.Errorf("error lost typo'd field name %q: %v", "verifcation", err)
+	}
+	// The source filename must appear, anchored to the catalog file.
+	if !strings.Contains(msg, "storage.yaml") {
+		t.Errorf("error missing source filename %q: %v", "storage.yaml", err)
+	}
+	// The entry's source line — captured during the rawFile pass —
+	// must appear in the error. yaml.v3 would otherwise report "line 1"
+	// of the marshaled fragment.
+	wantLineMarker := fmt.Sprintf("storage.yaml:%d", wantEntryLine)
+	if !strings.Contains(msg, wantLineMarker) {
+		t.Errorf("error missing source line marker %q: %v", wantLineMarker, err)
+	}
+	// The fragment-relative "line 1: " prefix from yaml.v3 must be gone.
+	// Use the colon-anchored form so we don't accidentally match a real
+	// "line 1" inside a quoted user string somewhere.
+	if strings.Contains(msg, "line 1:") {
+		t.Errorf("error still contains fragment-relative %q prefix; rewriteStrictDecodeErr regression: %v",
+			"line 1:", err)
 	}
 }
 
