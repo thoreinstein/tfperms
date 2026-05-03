@@ -57,13 +57,21 @@ const verifiedAtLayout = "2006-01-02"
 
 // testedAgainstProviderConstraintPattern is the best-effort lexical
 // shape of a single comma-separated piece of a Terraform / HCL version
-// constraint. It accepts an optional operator prefix ([<>=!~]+) drawn
-// from the Terraform-supported set (`>=`, `<=`, `>`, `<`, `=`, `!=`,
-// `~>`), optional whitespace between the operator and the version, and
-// then a version-like token starting with a digit and continuing with
+// constraint. It accepts an optional operator prefix from the exact
+// Terraform-supported set (`>=`, `<=`, `!=`, `~>`, `>`, `<`, `=`),
+// optional whitespace between the operator and the version, and then a
+// version-like token starting with a digit and continuing with
 // alphanumerics, dots, hyphens, and pluses (covering both standard
 // semver such as `5.0.0-rc1+build.7` and the `6.x` short-form already
 // accepted by the catalog).
+//
+// The operator alternation lists the two-character operators (`>=`,
+// `<=`, `!=`, `~>`) ahead of the single-character ones so the regex
+// engine cannot match the `>` of `>=` and then fail on the trailing
+// `=`. Using a strict alternation rather than a character class
+// (`[<>=!~]*`) is what blocks malformed sequences like `!!`, `><`, or
+// `=~`: a character class would accept any combination of those
+// symbols regardless of order or repetition.
 //
 // The regex deliberately does not parse the version into major / minor
 // / patch components: the validator only certifies that the contributor
@@ -71,7 +79,7 @@ const verifiedAtLayout = "2006-01-02"
 // placeholder ("TODO", "latest"). Strict parsing would require pulling
 // in hashicorp/go-version, and the spec calls this out as best-effort.
 var testedAgainstProviderConstraintPattern = regexp.MustCompile(
-	`^\s*[<>=!~]*\s*\d[0-9A-Za-z.\-+]*\s*$`,
+	`^\s*(>=|<=|!=|~>|>|<|=)?\s*\d[0-9A-Za-z.\-+]*\s*$`,
 )
 
 // hclIdentifierPattern is the lexical shape every HCL identifier — and
