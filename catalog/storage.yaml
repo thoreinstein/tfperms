@@ -1,8 +1,93 @@
-# Placeholder catalog file. Phase 4 of the catalog implementation
-# replaces this with a comprehensive storage.yaml that exercises every
-# schema feature. Until then this file exists only so //go:embed *.yaml
-# in embed.go has at least one match — the embed directive otherwise
-# fails the build with "no matching files".
-resources: {}
-data_sources: {}
-iam_bindings: {}
+# GCS / Cloud Storage permission catalog.
+#
+# This file is the canonical example for the tfperms permission catalog.
+# It exercises every supported schema feature so contributors adding a
+# new service file have a complete reference. Keep it tidy:
+#
+#   - One Terraform resource type per entry.
+#   - Permissions sorted alphabetically per list.
+#   - Comments above non-obvious permissions explaining when they fire.
+#
+# Permission strings are GCP IAM permission identifiers
+# (service.resource.verb), NOT roles. Roles are constructed downstream
+# by the analyzer from these permissions.
+
+resources:
+  google_storage_bucket:
+    verification:
+      method: gcloud
+      command: "gcloud storage buckets describe gs://{name}"
+    permissions:
+      plan:
+        # Bucket reads happen during refresh.
+        - storage.buckets.get
+      apply:
+        - storage.buckets.create
+        - storage.buckets.delete
+        - storage.buckets.update
+    conditionals:
+      # Bucket-level IAM is only managed when uniform_bucket_level_access
+      # is true; without it, ACLs are the surface and IAM permissions
+      # are not exercised by the resource.
+      - when:
+          uniform_bucket_level_access: true
+        permissions:
+          plan:
+            - storage.buckets.getIamPolicy
+          apply:
+            - storage.buckets.setIamPolicy
+
+  google_storage_bucket_object:
+    verification:
+      method: gcloud
+      command: "gcloud storage objects describe gs://{bucket}/{name}"
+    permissions:
+      plan:
+        - storage.objects.get
+      apply:
+        - storage.objects.create
+        - storage.objects.delete
+        - storage.objects.update
+
+data_sources:
+  # Reading bucket metadata for downstream interpolation. No write
+  # permissions because data sources are read-only at the GCP API
+  # level — even refresh on apply only re-reads.
+  google_storage_bucket:
+    verification:
+      method: gcloud
+    permissions:
+      plan:
+        - storage.buckets.get
+
+iam_bindings:
+  google_storage_bucket_iam_binding:
+    parent_resource: google_storage_bucket
+    verification:
+      method: rest
+      command: "GET https://storage.googleapis.com/storage/v1/b/{bucket}/iam"
+    permissions:
+      plan:
+        - storage.buckets.getIamPolicy
+      apply:
+        - storage.buckets.setIamPolicy
+
+  google_storage_bucket_iam_member:
+    parent_resource: google_storage_bucket
+    verification:
+      method: rest
+    permissions:
+      plan:
+        - storage.buckets.getIamPolicy
+      apply:
+        - storage.buckets.setIamPolicy
+
+  google_storage_bucket_iam_policy:
+    parent_resource: google_storage_bucket
+    verification:
+      method: rest
+    permissions:
+      plan:
+        - storage.buckets.getIamPolicy
+      apply:
+        - storage.buckets.setIamPolicy
