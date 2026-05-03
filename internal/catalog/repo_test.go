@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	catalogdata "github.com/thoreinstein/tfperms/catalog"
 )
@@ -377,22 +378,66 @@ func TestRepositoryCatalogConditionalsAreLocked(t *testing.T) {
 	}
 }
 
+// provenanceFloorDate is the earliest verified_at the repository will
+// accept. The catalog work formally started in 2024, so any earlier
+// date is necessarily a placeholder. The test uses a fixed floor rather
+// than "N years ago" so the assertion is deterministic across CI runs
+// regardless of the wall clock — a year-relative window would silently
+// accept stale dates as the floor advanced, which is the exact failure
+// mode this test exists to prevent.
+var provenanceFloorDate = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// provenanceCeilingSlack caps how far in the future a verified_at may
+// be. Some slack accommodates timezone differences between the
+// contributor's machine and CI; more than a few days indicates a typo
+// or fabricated date. 7 days is generous and still catches "year 2099"
+// stubs.
+const provenanceCeilingSlack = 7 * 24 * time.Hour
+
+// obviouslyStubVerifiedAt enumerates date strings that are formally
+// well-formed YYYY-MM-DD but are recognisable placeholders. Go's
+// time.Time zero value formats as "0001-01-01" so it appears here, as
+// does the Unix epoch and a handful of common copy-paste defaults.
+//
+// This list is not exhaustive — a sufficiently determined contributor
+// can write a plausible-looking arbitrary date — but combined with the
+// floor / ceiling window it forces a contributor to commit to a real,
+// recent date rather than a stub.
+var obviouslyStubVerifiedAt = map[string]struct{}{
+	"0001-01-01": {},
+	"1970-01-01": {},
+	"2000-01-01": {},
+	"2099-01-01": {},
+	"9999-12-31": {},
+}
+
 // TestRepositoryCatalogVerificationProvenanceComplete pins that every
 // committed entry carries non-trivial provenance. The validator already
-// rejects empty fields, but this test goes further: it makes sure
-// nobody papered over a contribution by dropping in stub values like
-// "TODO" or "0001-01-01" to make the validator pass. The entries below
-// must point at real cloud.google.com or terraform-provider-google
-// URLs and verified_at must fall in a plausibly-recent date range.
+// rejects empty fields and unparseable dates, but this test goes
+// further: it makes sure nobody papered over a contribution by dropping
+// in stub values like "TODO" or "0001-01-01" to make the validator
+// pass. The entries below must point at real cloud.google.com or
+// terraform-provider-google URLs, must have a verified_at that parses
+// as YYYY-MM-DD, must avoid the obvious-stub date list, and must fall
+// inside [provenanceFloorDate, today + provenanceCeilingSlack].
 //
 // This is not a substitute for human review — a contributor can still
 // fabricate plausible-looking citations — but it raises the bar above
 // "the validator passes" and discourages copy-paste-with-blanks.
+//
+// Previous review feedback specifically called out that an earlier
+// version of this test claimed to verify verified_at but never
+// inspected the field. The verified_at block below is the fix: parse
+// it explicitly, reject the obvious-stub list, and bound it inside a
+// fixed window. If the assertion regresses, the implementation gap the
+// reviewer originally flagged would silently return.
 func TestRepositoryCatalogVerificationProvenanceComplete(t *testing.T) {
 	cat, err := Load()
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}
+
+	ceiling := time.Now().UTC().Add(provenanceCeilingSlack)
 
 	check := func(loc string, v Verification, tested string) {
 		t.Helper()
@@ -410,6 +455,32 @@ func TestRepositoryCatalogVerificationProvenanceComplete(t *testing.T) {
 		if !sawCitation {
 			t.Errorf("%s: source_urls %v contains no recognised citation domain", loc, v.SourceURLs)
 		}
+
+		// verified_at is parsed, then range-checked. The validator
+		// already rejects unparseable dates, but the validator does
+		// not check for plausibility, so a contributor can pass it by
+		// writing "0001-01-01". The range check below blocks that
+		// hatch.
+		if _, isStub := obviouslyStubVerifiedAt[v.VerifiedAt]; isStub {
+			t.Errorf("%s: verification.verified_at %q is on the obvious-stub list — write the actual date the verification ran", loc, v.VerifiedAt)
+		}
+		parsedDate, parseErr := time.Parse(verifiedAtLayout, v.VerifiedAt)
+		if parseErr != nil {
+			// The validator already enforces YYYY-MM-DD parseability,
+			// so this branch should be unreachable in CI. We still
+			// report it explicitly so a future loosening of the
+			// validator does not silently bypass the range check
+			// below.
+			t.Errorf("%s: verification.verified_at %q failed YYYY-MM-DD parse: %v", loc, v.VerifiedAt, parseErr)
+		} else {
+			if parsedDate.Before(provenanceFloorDate) {
+				t.Errorf("%s: verification.verified_at %q is before the project floor (%s)", loc, v.VerifiedAt, provenanceFloorDate.Format(verifiedAtLayout))
+			}
+			if parsedDate.After(ceiling) {
+				t.Errorf("%s: verification.verified_at %q is more than %s in the future (now=%s)", loc, v.VerifiedAt, provenanceCeilingSlack, ceiling.Format(verifiedAtLayout))
+			}
+		}
+
 		// verified_provider_version should look like a semver-ish
 		// release, not a placeholder. We do not parse it strictly —
 		// the catalog accepts any non-empty string — but flag obvious
@@ -429,6 +500,146 @@ func TestRepositoryCatalogVerificationProvenanceComplete(t *testing.T) {
 	}
 	for typ, e := range cat.IAMBindings {
 		check("iam_bindings/"+typ, e.Verification, e.TestedAgainstProvider)
+	}
+}
+
+// topTierEmpiricalResources is the canonical Epic 4 list of resource
+// types that MUST be empirically verified before they may be marked
+// empirical in the catalog YAML. The list maps a Terraform resource
+// type to the rationale for why it is on the tier-1 list; the
+// rationale string is surfaced in test failures so a future maintainer
+// reading a CI log understands why a particular resource is on the
+// list rather than having to grep the PDR.
+//
+// Membership rules:
+//
+//   - A resource is added to this map only after a human contributor
+//     performed empirical verification (see CONTRIBUTING.md) and
+//     captured the run in the entry's verification block. Adding to
+//     this list without changing the YAML to method: empirical fails
+//     TestRepositoryCatalogTopTierResourcesAreEmpirical.
+//   - A resource may be marked method: empirical in YAML only if it
+//     also appears in this map. The reverse check
+//     (TestRepositoryCatalogEmpiricalEntriesAreOnTopTierList) blocks
+//     unauthorised empirical claims.
+//   - The PDR (docs/tfperms_pdr.md, Epic 4) calls out approximately
+//     10-15 top-tier resources and gives examples
+//     (google_compute_instance, google_storage_bucket,
+//     google_bigquery_dataset, google_pubsub_topic,
+//     google_cloud_run_service, google_sql_database_instance, ...).
+//     Those examples are tracked as the population this list will
+//     eventually grow to cover; the actual membership is gated on a
+//     human running the verification in a real GCP project.
+//
+// The list is empty in this initial Epic 4 schema-and-loader branch
+// because no empirical verification has been performed yet. The
+// adjacent two tests (TopTierResourcesAreEmpirical /
+// EmpiricalEntriesAreOnTopTierList) enforce the contract regardless of
+// list size, so future PRs that do perform empirical verification can
+// add an entry here AND flip the YAML method to empirical with the
+// machine-checkable assurance that the two stay in lockstep.
+var topTierEmpiricalResources = map[string]string{}
+
+// TestRepositoryCatalogTopTierResourcesAreEmpirical enforces the Epic
+// 4 contract that every resource the project has designated as
+// "top-tier" (empirically verified by a human) carries
+// method: empirical in the catalog YAML. The previous review flagged
+// the absence of this gate as a correctness issue: without it, a
+// contributor can claim a resource is top-tier in code review prose
+// while shipping a docs+source mapping, and CI does not notice.
+//
+// Test mechanics:
+//
+//   - Iterate topTierEmpiricalResources in lexicographic key order so
+//     a multi-failure run produces a stable diagnostic.
+//   - For each declared top-tier resource, look it up in the merged
+//     catalog. A missing entry is a hard failure — the list cannot
+//     contain ghost types.
+//   - Assert the entry's Verification.Method is exactly
+//     VerificationMethodEmpirical. Anything else means the contributor
+//     promoted the type without performing the verification.
+//
+// The test's pass-by-default behaviour with an empty top-tier list is
+// intentional: shipping the rule machinery before any entry actually
+// satisfies it lets a future "empirically verify google_storage_bucket"
+// PR be a single-file YAML change plus a single-line list addition,
+// gated entirely by the existing test instead of needing fresh test
+// scaffolding.
+func TestRepositoryCatalogTopTierResourcesAreEmpirical(t *testing.T) {
+	cat, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Sort for deterministic diagnostics. sortedKeys is the same
+	// helper the loader uses, which keeps the per-key error order
+	// consistent with everything else this test file emits.
+	for _, typ := range sortedKeys(topTierEmpiricalResources) {
+		rationale := topTierEmpiricalResources[typ]
+		entry, ok := cat.Resources[typ]
+		if !ok {
+			t.Errorf("topTierEmpiricalResources lists %q (%s) but it is not in the catalog — either add the YAML entry or remove from the top-tier list",
+				typ, rationale)
+			continue
+		}
+		if entry.Verification.Method != VerificationMethodEmpirical {
+			t.Errorf("resources/%s is on the top-tier list (%s) but verification.method = %q, want %q — perform the empirical verification or remove from the top-tier list",
+				typ, rationale, entry.Verification.Method, VerificationMethodEmpirical)
+		}
+	}
+}
+
+// TestRepositoryCatalogEmpiricalEntriesAreOnTopTierList is the inverse
+// of TestRepositoryCatalogTopTierResourcesAreEmpirical: every entry
+// that claims method: empirical in YAML must appear on the top-tier
+// list. This guards against a contributor stamping empirical on a
+// resource without going through the topTierEmpiricalResources gate
+// (where the rationale and review trail live).
+//
+// The pair of tests together implements a bidirectional contract:
+//
+//	YAML method == empirical  ⇔  type ∈ topTierEmpiricalResources
+//
+// Any drift between the two surfaces in CI rather than in user-visible
+// permission output. A contributor moving a resource into the empirical
+// tier must update both sides in the same diff; a reviewer can confirm
+// that by reading the diff alone.
+func TestRepositoryCatalogEmpiricalEntriesAreOnTopTierList(t *testing.T) {
+	cat, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	for _, typ := range sortedKeys(cat.Resources) {
+		entry := cat.Resources[typ]
+		if entry.Verification.Method != VerificationMethodEmpirical {
+			continue
+		}
+		if _, ok := topTierEmpiricalResources[typ]; !ok {
+			t.Errorf("resources/%s is marked method: empirical but is not on the topTierEmpiricalResources list — add it (with a rationale) or change the YAML method back to docs+source",
+				typ)
+		}
+	}
+
+	// Data sources and IAM bindings are read-only / boilerplate and
+	// are not part of the Epic 4 top-tier scope; the PDR only calls
+	// out core resources for empirical verification. We still surface
+	// any empirical claims on those shapes so a future spec change
+	// does not silently accept claims this test currently does not
+	// model.
+	for _, typ := range sortedKeys(cat.DataSources) {
+		entry := cat.DataSources[typ]
+		if entry.Verification.Method == VerificationMethodEmpirical {
+			t.Errorf("data_sources/%s is marked method: empirical — empirical verification is currently scoped to resources by Epic 4; revisit the contract before adding empirical claims to data sources",
+				typ)
+		}
+	}
+	for _, typ := range sortedKeys(cat.IAMBindings) {
+		entry := cat.IAMBindings[typ]
+		if entry.Verification.Method == VerificationMethodEmpirical {
+			t.Errorf("iam_bindings/%s is marked method: empirical — empirical verification is currently scoped to resources by Epic 4; revisit the contract before adding empirical claims to IAM bindings",
+				typ)
+		}
 	}
 }
 
