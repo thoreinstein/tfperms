@@ -225,3 +225,211 @@ func TestLoadProductionEmbed(t *testing.T) {
 		t.Fatal("Load() returned nil catalog")
 	}
 }
+
+// TestLoadStrictRejectsUnknownTopLevelKey is the regression test for the
+// silent-drop bug the previous review caught. Before strict decoding was
+// engaged on the top-level rawFile, a misspelled section name like
+// `resource:` (singular) would deserialise into nothing — the file
+// contributed zero entries to the merged catalog and the load happily
+// reported success. After this fix yaml.NewDecoder.KnownFields(true)
+// raises a hard error so contributor typos surface at CI rather than
+// quietly disappearing the entry.
+//
+// The cases below cover every entry kind so we catch a regression where
+// only one of the three sections (resources / data_sources / iam_bindings)
+// gains a strictness bypass.
+func TestLoadStrictRejectsUnknownTopLevelKey(t *testing.T) {
+	cases := []struct {
+		name   string
+		yaml   string
+		typoIn string // the misspelled key we expect to see in the error
+	}{
+		{
+			name: "misspelled resources",
+			yaml: `
+resource:
+  google_storage_bucket:
+    verification:
+      method: gcloud
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			typoIn: "resource",
+		},
+		{
+			name: "misspelled data_sources",
+			yaml: `
+data_source:
+  google_storage_bucket:
+    verification:
+      method: gcloud
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			typoIn: "data_source",
+		},
+		{
+			name: "misspelled iam_bindings",
+			yaml: `
+iam_binding:
+  google_storage_bucket_iam_binding:
+    parent_resource: google_storage_bucket
+    verification:
+      method: rest
+    permissions:
+      plan: [storage.buckets.getIamPolicy]
+`,
+			typoIn: "iam_binding",
+		},
+		{
+			name: "completely unknown section",
+			yaml: `
+resources_typo:
+  google_storage_bucket:
+    verification:
+      method: gcloud
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			typoIn: "resources_typo",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := fstest.MapFS{
+				"x.yaml": &fstest.MapFile{Data: []byte(tc.yaml)},
+			}
+			_, err := LoadFS(fs, ".")
+			if err == nil {
+				t.Fatalf("expected strict-mode error for unknown top-level key %q, got nil", tc.typoIn)
+			}
+			if !errors.Is(err, ErrCatalog) {
+				t.Errorf("error not wrapped with ErrCatalog: %v", err)
+			}
+			msg := err.Error()
+			// The error must name the offending file AND the typo'd field
+			// so the contributor knows where to look.
+			if !strings.Contains(msg, "x.yaml") {
+				t.Errorf("error missing filename: %v", err)
+			}
+			if !strings.Contains(msg, tc.typoIn) {
+				t.Errorf("error missing typo %q: %v", tc.typoIn, err)
+			}
+		})
+	}
+}
+
+// TestLoadStrictRejectsUnknownEntryField confirms strict decoding propagates
+// to the per-entry layer. The previous loader called yaml.Node.Decode,
+// which yaml.v3 does NOT subject to KnownFields, so a typo'd entry field
+// (e.g. `verifications:` plural instead of `verification:`) was silently
+// ignored — the entry decoded with a zero Verification, then the validator
+// reported "verification.method is required" which superficially looks
+// like a missing-field error rather than a typo. After the strict-decode
+// fix the loader rejects the typo with a yaml-level "field not found"
+// error before validation runs, which is the correct diagnostic.
+func TestLoadStrictRejectsUnknownEntryField(t *testing.T) {
+	cases := []struct {
+		name   string
+		yaml   string
+		typoIn string
+	}{
+		{
+			name: "resource entry typo",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verifications:
+      method: gcloud
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			typoIn: "verifications",
+		},
+		{
+			name: "data source entry typo",
+			yaml: `
+data_sources:
+  google_storage_bucket:
+    verification:
+      method: gcloud
+    permission:
+      plan: [storage.buckets.get]
+`,
+			typoIn: "permission",
+		},
+		{
+			name: "iam binding entry typo",
+			yaml: `
+iam_bindings:
+  google_storage_bucket_iam_binding:
+    parent: google_storage_bucket
+    verification:
+      method: rest
+    permissions:
+      plan: [storage.buckets.getIamPolicy]
+`,
+			typoIn: "parent",
+		},
+		{
+			name: "verification block typo",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      methode: gcloud
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			typoIn: "methode",
+		},
+		{
+			name: "permissions block typo",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: gcloud
+    permissions:
+      plans: [storage.buckets.get]
+`,
+			typoIn: "plans",
+		},
+		{
+			name: "conditional entry typo",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: gcloud
+    permissions:
+      plan: [storage.buckets.get]
+    conditionals:
+      - whne:
+          uniform_bucket_level_access: true
+        permissions:
+          apply: [storage.buckets.update]
+`,
+			typoIn: "whne",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := fstest.MapFS{
+				"x.yaml": &fstest.MapFile{Data: []byte(tc.yaml)},
+			}
+			_, err := LoadFS(fs, ".")
+			if err == nil {
+				t.Fatalf("expected strict-mode error for unknown entry field %q, got nil", tc.typoIn)
+			}
+			if !errors.Is(err, ErrCatalog) {
+				t.Errorf("error not wrapped with ErrCatalog: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.typoIn) {
+				t.Errorf("error missing typo %q: %v", tc.typoIn, err)
+			}
+		})
+	}
+}
