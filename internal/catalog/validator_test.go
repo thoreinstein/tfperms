@@ -16,6 +16,12 @@ import (
 // so it doubles as an integration check: a regression in the loader
 // that drops Position or Type before validate() runs would surface
 // here, since the asserted substrings include the entry path.
+//
+// Each fixture provides ONLY enough valid baseline schema to isolate
+// the rule under test. Cases that cover a single missing field omit
+// that field while keeping the rest of the entry valid; that way a
+// regression in another rule does not mask the rule actually being
+// tested.
 func TestValidate(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -27,6 +33,11 @@ func TestValidate(t *testing.T) {
 			yaml: `
 resources:
   google_storage_bucket:
+    verification:
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.get]
 `,
@@ -39,10 +50,107 @@ resources:
   google_storage_bucket:
     verification:
       method: telepathy
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.get]
 `,
-			wantSubs: []string{"verification.method", "telepathy", "gcloud", "rest", "terraform"},
+			wantSubs: []string{"verification.method", "telepathy", "empirical", "docs+source"},
+		},
+		{
+			name: "missing verification source_urls",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"verification.source_urls", "at least one citation"},
+		},
+		{
+			name: "blank verification source_urls entry",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls:
+        - "   "
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"verification.source_urls[0] is empty"},
+		},
+		{
+			name: "missing verified_at",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"verification.verified_at is required"},
+		},
+		{
+			name: "malformed verified_at",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "yesterday"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"verification.verified_at", "yesterday", "YYYY-MM-DD"},
+		},
+		{
+			name: "missing verified_provider_version",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"verification.verified_provider_version is required"},
+		},
+		{
+			name: "missing tested_against_provider",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"tested_against_provider is required"},
 		},
 		{
 			name: "missing permissions.plan",
@@ -50,7 +158,11 @@ resources:
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
 `,
 			wantSubs: []string{"permissions.plan must contain at least one permission"},
 		},
@@ -60,7 +172,11 @@ resources:
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: []
 `,
@@ -72,7 +188,11 @@ resources:
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan:
         - "   "
@@ -80,19 +200,59 @@ resources:
 			wantSubs: []string{"permissions.plan[0] is empty"},
 		},
 		{
-			name: "blank apply permission",
+			name: "blank create permission",
 			yaml: `
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.get]
-      apply:
+      create:
         - storage.buckets.create
         - ""
 `,
-			wantSubs: []string{"permissions.apply[1] is empty"},
+			wantSubs: []string{"permissions.create[1] is empty"},
+		},
+		{
+			name: "blank update permission",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+      update:
+        - "   "
+`,
+			wantSubs: []string{"permissions.update[0] is empty"},
+		},
+		{
+			name: "blank delete permission",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+      delete:
+        - ""
+`,
+			wantSubs: []string{"permissions.delete[0] is empty"},
 		},
 		{
 			name: "data source missing plan",
@@ -100,7 +260,11 @@ resources:
 data_sources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
 `,
 			wantSubs: []string{"data_sources/google_storage_bucket", "permissions.plan must contain at least one permission"},
 		},
@@ -110,10 +274,14 @@ data_sources:
 iam_bindings:
   google_storage_bucket_iam_binding:
     verification:
-      method: rest
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.getIamPolicy]
-      apply: [storage.buckets.setIamPolicy]
+      create: [storage.buckets.setIamPolicy]
 `,
 			wantSubs: []string{"iam_bindings/google_storage_bucket_iam_binding", "parent_resource is required"},
 		},
@@ -124,10 +292,14 @@ iam_bindings:
   google_storage_bucket_iam_binding:
     parent_resource: google_storage_bucket
     verification:
-      method: rest
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.getIamPolicy]
-      apply: [storage.buckets.setIamPolicy]
+      create: [storage.buckets.setIamPolicy]
 `,
 			wantSubs: []string{"parent_resource", "google_storage_bucket", "is not a declared resource type"},
 		},
@@ -137,13 +309,17 @@ iam_bindings:
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.get]
     conditionals:
       - when: {}
         permissions:
-          apply: [storage.buckets.update]
+          update: [storage.buckets.update]
 `,
 			wantSubs: []string{"conditionals[0]", "when clause must have at least one predicate"},
 		},
@@ -153,7 +329,11 @@ resources:
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.get]
     conditionals:
@@ -161,7 +341,27 @@ resources:
           uniform_bucket_level_access: true
         permissions:
           plan: []
-          apply: []
+`,
+			wantSubs: []string{"conditionals[0]", "must add at least one permission"},
+		},
+		{
+			name: "data source conditional adds no permissions",
+			yaml: `
+data_sources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+    conditionals:
+      - when:
+          include_iam: true
+        permissions:
+          plan: []
 `,
 			wantSubs: []string{"conditionals[0]", "must add at least one permission"},
 		},
@@ -199,31 +399,46 @@ func TestValidateAcceptsCanonicalCatalog(t *testing.T) {
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
-      command: "gcloud storage buckets describe gs://{name}"
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.get]
-      apply: [storage.buckets.create, storage.buckets.update, storage.buckets.delete]
+      create: [storage.buckets.create]
+      update: [storage.buckets.update]
+      delete: [storage.buckets.delete]
     conditionals:
       - when:
           uniform_bucket_level_access: true
         permissions:
-          plan: []
-          apply: [storage.buckets.update]
+          create: [storage.buckets.setIamPolicy]
+          update: [storage.buckets.setIamPolicy]
 data_sources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.get]
 iam_bindings:
   google_storage_bucket_iam_binding:
     parent_resource: google_storage_bucket
     verification:
-      method: rest
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan: [storage.buckets.getIamPolicy]
-      apply: [storage.buckets.setIamPolicy]
+      create: [storage.buckets.setIamPolicy]
+      update: [storage.buckets.setIamPolicy]
+      delete: [storage.buckets.setIamPolicy]
 `
 	fs := fstest.MapFS{
 		"storage.yaml": &fstest.MapFile{Data: []byte(yaml)},
@@ -242,8 +457,12 @@ func TestValidatePositionInError(t *testing.T) {
 	yaml := `
 resources:
   google_storage_bucket:
-    permissions:
-      plan: [storage.buckets.get]
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
 `
 	fs := fstest.MapFS{
 		"storage.yaml": &fstest.MapFile{Data: []byte(yaml)},

@@ -10,6 +10,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// validProvenance is the chunk of YAML every loader / validator
+// fixture needs to satisfy the verification + tested_against_provider
+// rules so each test can isolate ONE schema violation.
+//
+// Indented six spaces because the typical fixture nests it under an
+// entry key two levels deep (e.g. resources / google_storage_bucket /
+// verification). Tests that need a different indentation embed the
+// fields inline.
+const validProvenance = `    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+`
+
 // TestLoadMergesFiles confirms that LoadFS reads every *.yaml file in
 // the directory and merges entries keyed by Terraform type. The fixtures
 // are split into two files so the test catches a regression where the
@@ -19,42 +35,29 @@ func TestLoadMergesFiles(t *testing.T) {
 		"storage.yaml": &fstest.MapFile{Data: []byte(`
 resources:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
-      plan:
-        - storage.buckets.get
-      apply:
-        - storage.buckets.create
+` + validProvenance + `    permissions:
+      plan: [storage.buckets.get]
+      create: [storage.buckets.create]
 data_sources:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
-      plan:
-        - storage.buckets.get
+` + validProvenance + `    permissions:
+      plan: [storage.buckets.get]
 iam_bindings:
   google_storage_bucket_iam_binding:
     parent_resource: google_storage_bucket
-    verification:
-      method: rest
-    permissions:
-      plan:
-        - storage.buckets.getIamPolicy
-      apply:
-        - storage.buckets.setIamPolicy
+` + validProvenance + `    permissions:
+      plan: [storage.buckets.getIamPolicy]
+      create: [storage.buckets.setIamPolicy]
+      update: [storage.buckets.setIamPolicy]
+      delete: [storage.buckets.setIamPolicy]
 `)},
 		"compute.yaml": &fstest.MapFile{Data: []byte(`
 resources:
   google_compute_instance:
-    verification:
-      method: gcloud
-    permissions:
-      plan:
-        - compute.instances.get
-      apply:
-        - compute.instances.create
-        - compute.instances.delete
+` + validProvenance + `    permissions:
+      plan: [compute.instances.get]
+      create: [compute.instances.create]
+      delete: [compute.instances.delete]
 `)},
 		// Files that are not YAML must be ignored, not parsed.
 		"README.md": &fstest.MapFile{Data: []byte("# not a yaml file\n")},
@@ -101,17 +104,13 @@ func TestLoadDuplicateResourceTypes(t *testing.T) {
 		"storage.yaml": &fstest.MapFile{Data: []byte(`
 resources:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
+` + validProvenance + `    permissions:
       plan: [storage.buckets.get]
 `)},
 		"storage_dup.yaml": &fstest.MapFile{Data: []byte(`
 resources:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
+` + validProvenance + `    permissions:
       plan: [storage.buckets.get]
 `)},
 	}
@@ -169,26 +168,22 @@ func TestLoadEmptyDirectory(t *testing.T) {
 
 // TestLoadAnnotatesConditionalPositions confirms the loader populates the
 // per-conditional Position with the line of the conditional list item,
-// not the line of the surrounding entry. Line 11 below is the line of
-// `- when:` (the first conditional) — assertion uses an inequality
-// against the entry line so the test does not break under whitespace
-// edits to the fixture.
+// not the line of the surrounding entry. The fixture intentionally puts
+// the conditional several lines below the entry header so the
+// inequality-based assertion (cond line > entry line) is meaningful.
 func TestLoadAnnotatesConditionalPositions(t *testing.T) {
 	fs := fstest.MapFS{
 		"storage.yaml": &fstest.MapFile{Data: []byte(`
 resources:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
+` + validProvenance + `    permissions:
       plan: [storage.buckets.get]
-      apply: [storage.buckets.create]
+      create: [storage.buckets.create]
     conditionals:
       - when:
           uniform_bucket_level_access: true
         permissions:
-          plan: []
-          apply: [storage.buckets.update]
+          update: [storage.buckets.update]
 `)},
 	}
 	cat, err := LoadFS(fs, ".")
@@ -215,10 +210,49 @@ resources:
 	}
 }
 
+// TestLoadAnnotatesDataSourceConditionalPositions is the sibling of
+// TestLoadAnnotatesConditionalPositions for the read-only data-source
+// shape. The position-extraction helper is shared between resources and
+// data sources, so this test catches a regression where one of the call
+// sites stops invoking it.
+func TestLoadAnnotatesDataSourceConditionalPositions(t *testing.T) {
+	fs := fstest.MapFS{
+		"storage.yaml": &fstest.MapFile{Data: []byte(`
+data_sources:
+  google_storage_bucket:
+` + validProvenance + `    permissions:
+      plan: [storage.buckets.get]
+    conditionals:
+      - when:
+          include_iam: true
+        permissions:
+          plan: [storage.buckets.getIamPolicy]
+`)},
+	}
+	cat, err := LoadFS(fs, ".")
+	if err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	ds := cat.DataSources["google_storage_bucket"]
+	if ds == nil {
+		t.Fatal("missing data source entry")
+	}
+	if len(ds.Conditionals) != 1 {
+		t.Fatalf("conditionals len = %d, want 1", len(ds.Conditionals))
+	}
+	condPos := ds.Conditionals[0].Position
+	if condPos.Line == 0 {
+		t.Errorf("data source conditional Line = 0, want non-zero")
+	}
+	if condPos.Line <= ds.Position.Line {
+		t.Errorf("data source conditional Line %d not greater than entry Line %d", condPos.Line, ds.Position.Line)
+	}
+}
+
 // TestLoadProductionEmbed exercises the package-level Load() entry point
 // against the actual embedded catalog. It is a smoke test: as long as
 // the embedded files parse and pass validation we are happy. Full
-// repository-consistency checks live in catalog_repo_test.go (Phase 5).
+// repository-consistency checks live in repo_test.go.
 func TestLoadProductionEmbed(t *testing.T) {
 	cat, err := Load()
 	if err != nil {
@@ -252,9 +286,7 @@ func TestLoadStrictRejectsUnknownTopLevelKey(t *testing.T) {
 			yaml: `
 resource:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
+` + validProvenance + `    permissions:
       plan: [storage.buckets.get]
 `,
 			typoIn: "resource",
@@ -264,9 +296,7 @@ resource:
 			yaml: `
 data_source:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
+` + validProvenance + `    permissions:
       plan: [storage.buckets.get]
 `,
 			typoIn: "data_source",
@@ -277,9 +307,7 @@ data_source:
 iam_binding:
   google_storage_bucket_iam_binding:
     parent_resource: google_storage_bucket
-    verification:
-      method: rest
-    permissions:
+` + validProvenance + `    permissions:
       plan: [storage.buckets.getIamPolicy]
 `,
 			typoIn: "iam_binding",
@@ -289,9 +317,7 @@ iam_binding:
 			yaml: `
 resources_typo:
   google_storage_bucket:
-    verification:
-      method: gcloud
-    permissions:
+` + validProvenance + `    permissions:
       plan: [storage.buckets.get]
 `,
 			typoIn: "resources_typo",
@@ -344,7 +370,7 @@ func TestLoadStrictRejectsUnknownEntryField(t *testing.T) {
 resources:
   google_storage_bucket:
     verifications:
-      method: gcloud
+      method: docs+source
     permissions:
       plan: [storage.buckets.get]
 `,
@@ -356,7 +382,7 @@ resources:
 data_sources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
     permission:
       plan: [storage.buckets.get]
 `,
@@ -369,7 +395,7 @@ iam_bindings:
   google_storage_bucket_iam_binding:
     parent: google_storage_bucket
     verification:
-      method: rest
+      method: docs+source
     permissions:
       plan: [storage.buckets.getIamPolicy]
 `,
@@ -381,7 +407,7 @@ iam_bindings:
 resources:
   google_storage_bucket:
     verification:
-      methode: gcloud
+      methode: docs+source
     permissions:
       plan: [storage.buckets.get]
 `,
@@ -393,7 +419,7 @@ resources:
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
     permissions:
       plans: [storage.buckets.get]
 `,
@@ -405,16 +431,29 @@ resources:
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
     permissions:
       plan: [storage.buckets.get]
     conditionals:
       - whne:
           uniform_bucket_level_access: true
         permissions:
-          apply: [storage.buckets.update]
+          update: [storage.buckets.update]
 `,
 			typoIn: "whne",
+		},
+		{
+			name: "data source permissions reject create",
+			yaml: `
+data_sources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+    permissions:
+      plan: [storage.buckets.get]
+      create: [storage.buckets.create]
+`,
+			typoIn: "create",
 		},
 	}
 

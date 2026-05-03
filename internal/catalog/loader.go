@@ -168,7 +168,12 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 		}
 		entry.Type = typ
 		entry.Position = pos
-		annotateConditionals(entry.Conditionals, &node, file)
+		condLines := conditionalLines(&node)
+		for i := range entry.Conditionals {
+			if i < len(condLines) {
+				entry.Conditionals[i].Position = Position{File: file, Line: condLines[i]}
+			}
+		}
 		cat.Resources[typ] = entry
 	}
 
@@ -191,7 +196,12 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 		}
 		entry.Type = typ
 		entry.Position = pos
-		annotateConditionals(entry.Conditionals, &node, file)
+		condLines := conditionalLines(&node)
+		for i := range entry.Conditionals {
+			if i < len(condLines) {
+				entry.Conditionals[i].Position = Position{File: file, Line: condLines[i]}
+			}
+		}
 		cat.DataSources[typ] = entry
 	}
 
@@ -259,30 +269,39 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// annotateConditionals walks the entry's parent yaml.Node looking for
-// `conditionals:` and assigns Position.Line to each decoded Conditional
-// so validation errors can quote the line of the offending conditional
-// rather than the line of the surrounding entry.
+// conditionalLines walks the entry's parent yaml.Node looking for
+// `conditionals:` and returns the line number of each list item, in the
+// same order as yaml.v3 produced the decoded slice. Callers use the
+// returned slice to set Position.Line on each Conditional /
+// DataSourceConditional so validation errors can quote the line of the
+// offending conditional rather than the line of the surrounding entry.
+//
+// Splitting position extraction from position assignment lets callers
+// share this helper across the two conditional types (Conditional on
+// resources / iam bindings, DataSourceConditional on data sources)
+// without a generic constraint or interface — Go's type system would
+// otherwise force a wrapper type, which adds noise without clarity for
+// such a small helper.
 //
 // The walk is intentionally tolerant: if the conditionals subtree is
-// missing or shaped unexpectedly we leave Position.Line at zero rather
-// than failing the load. The validator already has its own checks; a
-// missing line number degrades the error message but does not produce
+// missing or shaped unexpectedly the helper returns nil rather than
+// failing the load. The validator already has its own checks; a missing
+// line number degrades the error message but does not produce
 // silently-wrong behaviour.
 //
-// Index alignment between conds[i] and seq.Content[i] depends on
-// yaml.Node.Decode producing the slice in the same order as the
-// document. yaml.v3 documents this guarantee for sequences.
-func annotateConditionals(conds []Conditional, parent *yaml.Node, file string) {
-	if len(conds) == 0 || parent == nil {
-		return
+// Index alignment between the returned slice and the decoded conditionals
+// slice depends on yaml.Node.Decode producing the slice in the same order
+// as the document. yaml.v3 documents this guarantee for sequences.
+func conditionalLines(parent *yaml.Node) []int {
+	if parent == nil {
+		return nil
 	}
 	mapNode := parent
 	if mapNode.Kind == yaml.DocumentNode && len(mapNode.Content) > 0 {
 		mapNode = mapNode.Content[0]
 	}
 	if mapNode.Kind != yaml.MappingNode {
-		return
+		return nil
 	}
 	var seq *yaml.Node
 	for i := 0; i+1 < len(mapNode.Content); i += 2 {
@@ -293,12 +312,11 @@ func annotateConditionals(conds []Conditional, parent *yaml.Node, file string) {
 		}
 	}
 	if seq == nil || seq.Kind != yaml.SequenceNode {
-		return
+		return nil
 	}
+	lines := make([]int, len(seq.Content))
 	for i, item := range seq.Content {
-		if i >= len(conds) {
-			break
-		}
-		conds[i].Position = Position{File: file, Line: item.Line}
+		lines[i] = item.Line
 	}
+	return lines
 }
