@@ -48,6 +48,51 @@ verification methods are:
 [1]: https://github.com/hashicorp/terraform-provider-google
 [2]: https://cloud.google.com/iam/docs/permissions-reference
 
+### Verification tiers
+
+The Epic 4 PDR splits catalog entries into two tiers:
+
+- **Top-tier (~10-15 resources)**: empirically verified. These are
+  the most-used resource types where a wrong permission mapping does
+  the most damage. The PDR's example top-tier list is
+  `google_compute_instance`, `google_storage_bucket`,
+  `google_bigquery_dataset`, `google_pubsub_topic`,
+  `google_cloud_run_service`, `google_sql_database_instance`, plus
+  the rest of the Top-15.
+- **Long-tail (~20-35 resources)**: documentation-and-source
+  verified. The remaining hand-curated coverage uses the `docs+source`
+  workflow above.
+
+Tier membership is tracked in
+`internal/catalog/repo_test.go` as the `topTierEmpiricalResources`
+map. Two tests enforce a bidirectional contract between the map and
+the YAML:
+
+- `TestRepositoryCatalogTopTierResourcesAreEmpirical` requires every
+  resource on the map to have `method: empirical` in YAML.
+- `TestRepositoryCatalogEmpiricalEntriesAreOnTopTierList` requires
+  every resource with `method: empirical` in YAML to appear on the
+  map.
+
+To promote a resource into the empirical tier in a single PR:
+
+1. Run the empirical verification against a real GCP project. Capture
+   the exact `gcloud iam service-accounts ...` and `terraform apply`
+   command lines plus their dates in the entry's verification block
+   comments.
+2. Change the YAML entry's `verification.method` to `empirical` and
+   update `verified_at` to the date the verification ran.
+3. Add the Terraform type to `topTierEmpiricalResources` with a
+   one-line rationale (e.g. `"PDR Epic 4 top-15 example"`). The map
+   value is surfaced verbatim in test failures, so a future maintainer
+   reading a CI log understands why the resource is on the list.
+4. Run `go test ./internal/catalog/...`. Both tier tests should now
+   pass.
+
+The map is intentionally empty in the schema-and-loader baseline. As
+PRs do empirical verification work the map grows; the test pair makes
+silent drift impossible.
+
 For each entry you add or modify:
 
 1. Pick the verification method. If you are not running `terraform
