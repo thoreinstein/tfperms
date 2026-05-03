@@ -365,6 +365,113 @@ data_sources:
 `,
 			wantSubs: []string{"conditionals[0]", "must add at least one permission"},
 		},
+		{
+			// A "TODO" or other prose value passes the empty check but is
+			// not a recognisable Terraform version constraint. The
+			// best-effort regex must reject it so a contributor can't
+			// merge a stub.
+			name: "tested_against_provider placeholder string",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: "TODO"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"tested_against_provider", "TODO", "not a recognised version constraint"},
+		},
+		{
+			// "latest" is the most common drive-by mistake — it looks
+			// plausible to a human but does not parse as a constraint
+			// expression and would be silently accepted by the previous
+			// non-empty-only check.
+			name: "tested_against_provider non-version word",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: "latest"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"tested_against_provider", "latest", "not a recognised version constraint"},
+		},
+		{
+			// Multi-clause constraints are common (`>=5.0.0,<7.0.0`); a
+			// trailing comma yields an empty clause that should be
+			// rejected as a typo.
+			name: "tested_against_provider trailing empty clause",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"tested_against_provider clause", "is empty"},
+		},
+		{
+			// A `when` key containing whitespace or punctuation cannot be
+			// a real Terraform attribute and is almost always a YAML
+			// indentation typo. Reject it lexically.
+			name: "when clause key with invalid identifier",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+    conditionals:
+      - when:
+          "uniform bucket level access": true
+        permissions:
+          update: [storage.buckets.update]
+`,
+			wantSubs: []string{"conditionals[0]", "uniform bucket level access", "not a valid HCL identifier"},
+		},
+		{
+			// Branching on a meta-argument like `count` is conceptually
+			// nonsensical: count governs whether the resource exists at
+			// all, not which permissions it requires once it does.
+			name: "when clause uses meta-argument",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+    conditionals:
+      - when:
+          count: 1
+        permissions:
+          update: [storage.buckets.update]
+`,
+			wantSubs: []string{"conditionals[0]", `"count"`, "meta-argument"},
+		},
 	}
 
 	for _, tc := range cases {

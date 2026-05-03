@@ -34,6 +34,7 @@ package catalog
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -53,6 +54,55 @@ var validVerificationMethods = map[VerificationMethod]struct{}{
 // contributor ran terraform apply on day X) and a wall-clock timestamp
 // would imply a precision the entry does not actually have.
 const verifiedAtLayout = "2006-01-02"
+
+// testedAgainstProviderConstraintPattern is the best-effort lexical
+// shape of a single comma-separated piece of a Terraform / HCL version
+// constraint. It accepts an optional operator prefix ([<>=!~]+) drawn
+// from the Terraform-supported set (`>=`, `<=`, `>`, `<`, `=`, `!=`,
+// `~>`), optional whitespace between the operator and the version, and
+// then a version-like token starting with a digit and continuing with
+// alphanumerics, dots, hyphens, and pluses (covering both standard
+// semver such as `5.0.0-rc1+build.7` and the `6.x` short-form already
+// accepted by the catalog).
+//
+// The regex deliberately does not parse the version into major / minor
+// / patch components: the validator only certifies that the contributor
+// supplied something that *looks like* a constraint rather than a
+// placeholder ("TODO", "latest"). Strict parsing would require pulling
+// in hashicorp/go-version, and the spec calls this out as best-effort.
+var testedAgainstProviderConstraintPattern = regexp.MustCompile(
+	`^\s*[<>=!~]*\s*\d[0-9A-Za-z.\-+]*\s*$`,
+)
+
+// hclIdentifierPattern is the lexical shape every HCL identifier — and
+// therefore every Terraform attribute name reachable from a `when`
+// clause — must satisfy. We mirror the rule from
+// hashicorp/hcl/v2/hclsyntax: a leading letter or underscore followed
+// by letters, digits, underscores, or hyphens.
+//
+// Like the version-constraint regex this is a best-effort lexical
+// gate: the catalog does not carry the full provider schema, so the
+// validator cannot tell whether the attribute exists on the resource.
+// What it can do is reject obvious typos (whitespace, punctuation,
+// empty strings) before they reach the resolver.
+var hclIdentifierPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]*$`)
+
+// hclMetaArgs lists the Terraform meta-argument names that may not
+// appear as keys in a `when` predicate. A conditional that branches on
+// `count` or `for_each` is conceptually nonsensical: those meta-args
+// govern whether the resource exists at all, not which permissions it
+// requires once it does. Replicated here rather than imported from
+// internal/parser to keep the catalog package free of a parser
+// dependency — the two lists must stay in sync, but they're short and
+// stable enough to maintain by hand.
+var hclMetaArgs = map[string]struct{}{
+	"count":       {},
+	"for_each":    {},
+	"depends_on":  {},
+	"provider":    {},
+	"lifecycle":   {},
+	"provisioner": {},
+}
 
 // validate runs strict schema checks on a fully-merged Catalog and
 // returns the first error encountered, wrapped with ErrCatalog so
@@ -195,16 +245,36 @@ func validateVerification(v Verification, loc string) error {
 }
 
 // validateTestedAgainstProvider enforces that an entry declares the
-// provider version range it was verified against. The format is
-// intentionally not parsed — the catalog accepts any non-empty
-// constraint expression (e.g. ">=5.0.0,<7.0.0", "~> 6.0", "6.x") so the
-// catalog can match whatever convention the surrounding tooling is
-// using. The diagnostics command will surface the raw string to the
-// user; pinning a single grammar here would force a contributor whose
-// project uses a different idiom to translate.
+// provider version range it was verified against. The catalog still
+// accepts the same family of constraint expressions it always has —
+// ">=5.0.0,<7.0.0", "~> 6.0", "6.x" — so a contributor whose project
+// uses any of the standard Terraform constraint idioms keeps working.
+// The validator additionally runs a best-effort lexical check on each
+// comma-separated clause to catch placeholders ("TODO", "latest") and
+// stray prose that would otherwise pass the existing non-empty test.
+//
+// The grammar is not strict semver: full parsing would require pulling
+// in hashicorp/go-version and the spec explicitly calls for a
+// best-effort gate, so each clause is run through
+// testedAgainstProviderConstraintPattern, which checks for an optional
+// operator prefix and a digit-led version-like token.
 func validateTestedAgainstProvider(v string, loc string) error {
 	if strings.TrimSpace(v) == "" {
 		return fmt.Errorf("%w: %s: tested_against_provider is required", ErrCatalog, loc)
+	}
+	for i, clause := range strings.Split(v, ",") {
+		if strings.TrimSpace(clause) == "" {
+			return fmt.Errorf(
+				"%w: %s: tested_against_provider clause %d is empty",
+				ErrCatalog, loc, i,
+			)
+		}
+		if !testedAgainstProviderConstraintPattern.MatchString(clause) {
+			return fmt.Errorf(
+				"%w: %s: tested_against_provider clause %q is not a recognised version constraint (expected an optional operator like >=, <=, ~> followed by a version such as 6.0.0)",
+				ErrCatalog, loc, strings.TrimSpace(clause),
+			)
+		}
 	}
 	return nil
 }
@@ -302,14 +372,52 @@ func validateDataSourceConditional(c DataSourceConditional, loc string) error {
 }
 
 // validateWhen is the shared predicate check used by both conditional
-// types: a non-empty map with no blank keys.
+// types. It enforces three rules:
+//
+//  1. The map must be non-empty — an empty `when` would always match,
+//     which is better expressed as base permissions on the parent
+//     entry.
+//  2. Every key must be a syntactically valid HCL identifier so the
+//     resolver can match it against an attribute on the resource.
+//     This is a best-effort check: the catalog does not carry the
+//     full provider schema, so the validator cannot tell whether the
+//     attribute exists. What it can do is reject obvious typos
+//     (whitespace, punctuation, blanks) up front.
+//  3. Meta-argument names (count, for_each, depends_on, provider,
+//     lifecycle, provisioner) are forbidden — they govern whether the
+//     resource exists, not which permissions it requires once it
+//     does, so a conditional that branches on one is necessarily
+//     wrong. The list mirrors internal/parser's metaArgs plus the
+//     well-known nested meta-blocks.
+//
+// Iteration order over `when` is randomised by Go's map runtime, but
+// the validator stops at the first error so the failure surface stays
+// deterministic per fixture.
 func validateWhen(when map[string]any, loc string) error {
 	if len(when) == 0 {
 		return fmt.Errorf("%w: %s: when clause must have at least one predicate", ErrCatalog, loc)
 	}
+	// Sort keys so the first-error report is deterministic across runs.
+	keys := make([]string, 0, len(when))
 	for k := range when {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		if strings.TrimSpace(k) == "" {
 			return fmt.Errorf("%w: %s: when clause has empty key", ErrCatalog, loc)
+		}
+		if !hclIdentifierPattern.MatchString(k) {
+			return fmt.Errorf(
+				"%w: %s: when clause key %q is not a valid HCL identifier (expected leading letter or underscore, then letters / digits / underscores / hyphens)",
+				ErrCatalog, loc, k,
+			)
+		}
+		if _, isMeta := hclMetaArgs[k]; isMeta {
+			return fmt.Errorf(
+				"%w: %s: when clause key %q is a Terraform meta-argument and cannot be used as a conditional predicate",
+				ErrCatalog, loc, k,
+			)
 		}
 	}
 	return nil
