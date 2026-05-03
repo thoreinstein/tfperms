@@ -25,6 +25,9 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Catalog validate
+        run: make catalog-validate
+
       - name: Test
         run: make test
 
