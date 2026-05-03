@@ -17,12 +17,17 @@ import (
 // pass this test, which means no schema-violating entry can land via
 // the normal review process.
 //
-// This is the single test exposed by `make catalog-validate`. Naming
-// it TestCatalogValid (rather than the older TestRepositoryCatalogIsValid)
-// matches the make target's `-run` filter so the developer-facing
-// command and the test it runs use the same vocabulary. The other
-// TestRepositoryCatalog* tests in this file remain repository-level
-// invariants and run as part of the normal `go test ./...` suite.
+// `make catalog-validate` runs this test together with every
+// TestRepositoryCatalog* test in this file via a `-run` regex of
+// '^(TestCatalogValid|TestRepositoryCatalog)'. TestCatalogValid is the
+// schema-and-provenance smoke check; the TestRepositoryCatalog* tests
+// pin the deeper invariants (IAM binding resolution, per-file
+// contribution, permission locks, conditionals, provenance
+// completeness, and the empirical-tier contract). The Makefile target
+// comment promises "all schema and provenance rules" — that promise is
+// only kept if both groups run, so any new repository-level invariant
+// belongs in this file under the TestRepositoryCatalog prefix so the
+// gate picks it up automatically.
 //
 // This test is intentionally separate from TestLoadProductionEmbed
 // (in loader_test.go) which is a smoke test — that test only checks

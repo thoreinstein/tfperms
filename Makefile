@@ -31,7 +31,7 @@ lint: ## Run golangci-lint with .golangci.yml
 	golangci-lint run
 
 catalog-validate: ## Assert that the committed catalog satisfies all schema and provenance rules
-	go test ./internal/catalog -run TestCatalogValid
+	go test ./internal/catalog -run '^(TestCatalogValid|TestRepositoryCatalog)'
 
 release-snapshot: ## Build a local snapshot release via goreleaser
 	goreleaser release --snapshot --clean
