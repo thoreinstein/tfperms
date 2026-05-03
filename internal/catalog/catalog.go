@@ -12,7 +12,8 @@
 // Layout responsibilities:
 //   - This file (catalog.go) defines the data model: Catalog,
 //     ResourceEntry, DataSourceEntry, IAMBindingEntry, PermissionSet,
-//     Verification, Conditional, Position, and the VerificationMethod
+//     DataSourcePermissions, Verification, Conditional,
+//     DataSourceConditional, Position, and the VerificationMethod
 //     enum.
 //   - loader.go owns reading YAML files off an fs.FS, decoding them
 //     through yaml.v3, and merging multiple files into a single
@@ -26,6 +27,24 @@
 //     so validation diagnostics can quote the offending YAML location.
 //     The Position is intentionally NOT part of the YAML schema — it is
 //     derived from yaml.Node line numbers.
+//
+// Schema contract (Epic 4 of docs/tfperms_pdr.md):
+//   - Per-resource permissions are split into `plan`, `create`, `update`,
+//     and `delete` so the resolver can compute plan-only, apply-only and
+//     total-apply permission sets without re-deriving them.
+//   - Every resource / data source / iam binding entry MUST carry a
+//     `verification` block with method ∈ {empirical, docs+source},
+//     non-empty `source_urls`, a parseable `verified_at` date, and a
+//     `verified_provider_version`.
+//   - Every entry MUST carry a `tested_against_provider` field — the
+//     provider version range the catalog entry was verified against. The
+//     analyzer uses this to flag drift when a user's provider lockfile
+//     falls outside the range.
+//   - Data sources are read-only and only carry a `plan` permission list.
+//
+// Conditional permissions are additive: when their `when` clause matches
+// the resolved attribute values of a resource block, their permissions
+// union onto the base permission set.
 package catalog
 
 import (
@@ -34,17 +53,28 @@ import (
 )
 
 // VerificationMethod enumerates the supported strategies for verifying
-// that a resource described by the catalog exists in GCP. The enum is
+// that a catalog entry's permission mapping is accurate. The enum is
 // intentionally string-typed so YAML decodes naturally into the same
 // representation used in the schema.
+//
+// The two recognised methods correspond to the catalog verification
+// procedure documented in docs/tfperms_pdr.md (Epic 4):
+//
+//   - "empirical": the contributor invoked `terraform apply` against a
+//     least-privilege service account and iteratively granted the
+//     permissions the API rejected. Reserved for the most-used resources
+//     where false-positives are most painful.
+//   - "docs+source": the contributor cross-referenced the Terraform
+//     provider source for the resource against the GCP IAM permission
+//     reference. Acceptable for the long tail of resources where running
+//     `terraform apply` is impractical.
 type VerificationMethod string
 
 // Recognised VerificationMethod values. Anything else is rejected by the
 // validator with a "unknown verification.method" error.
 const (
-	VerificationMethodGcloud    VerificationMethod = "gcloud"
-	VerificationMethodREST      VerificationMethod = "rest"
-	VerificationMethodTerraform VerificationMethod = "terraform"
+	VerificationMethodEmpirical  VerificationMethod = "empirical"
+	VerificationMethodDocsSource VerificationMethod = "docs+source"
 )
 
 // Position locates a YAML node in its source file. File is the relative
@@ -69,27 +99,61 @@ func (p Position) String() string {
 	return fmt.Sprintf("%s:%d", p.File, p.Line)
 }
 
-// PermissionSet is the pair of permission lists consumed by the analyzer:
-// Plan permissions are required during `terraform plan`, Apply permissions
-// during `terraform apply`. The two are tracked separately so a consumer
-// can report a least-privilege role for a read-only plan run distinct
-// from a writing apply run.
+// PermissionSet is the per-resource permission split consumed by the
+// resolver. The four lists correspond to Terraform's lifecycle stages:
 //
-// A nil/empty Apply slice is permitted (read-only data sources), but Plan
-// must be present and non-empty for resource and data source entries —
-// the validator enforces this.
+//   - Plan:   required during `terraform plan` (state refresh / read).
+//   - Create: required when `terraform apply` creates a new instance.
+//   - Update: required when `terraform apply` updates an existing instance
+//     in place.
+//   - Delete: required when `terraform apply` destroys an instance.
+//
+// The validator requires Plan to be non-empty. The other three may be
+// empty (e.g. an immutable resource that cannot be updated would have no
+// Update permissions). The resolver derives apply-time permission sets
+// by unioning Create / Update / Delete and excluding any duplicates that
+// already appear in Plan; see Epic 5 for the exact algorithm.
 type PermissionSet struct {
-	Plan  []string `yaml:"plan"`
-	Apply []string `yaml:"apply"`
+	Plan   []string `yaml:"plan"`
+	Create []string `yaml:"create,omitempty"`
+	Update []string `yaml:"update,omitempty"`
+	Delete []string `yaml:"delete,omitempty"`
 }
 
-// Verification describes how to confirm a resource declared in the
-// catalog actually exists in GCP. Method is required; Command is an
-// optional human-oriented hint the analyzer can surface to operators —
-// the analyzer itself never executes it.
+// DataSourcePermissions is the read-only counterpart to PermissionSet.
+// Data sources do not write, so only Plan is meaningful — the schema does
+// not allow create / update / delete on a data source entry. Keeping the
+// shape distinct from PermissionSet makes that constraint expressible at
+// the Go type level rather than as a validator-only rule.
+type DataSourcePermissions struct {
+	Plan []string `yaml:"plan"`
+}
+
+// Verification describes how the contributor confirmed the permission
+// mapping in this entry is accurate. Every field is required by the
+// validator — the catalog policy (Epic 4) is that catalog updates without
+// provenance are not accepted. The analyzer never executes anything from
+// this block; it is contributor-and-reviewer-facing metadata that travels
+// with the entry so a future maintainer can replay the verification.
 type Verification struct {
-	Method  VerificationMethod `yaml:"method"`
-	Command string             `yaml:"command,omitempty"`
+	// Method is the verification strategy: empirical or docs+source. See
+	// VerificationMethod for the meaning of each.
+	Method VerificationMethod `yaml:"method"`
+	// SourceURLs are citations supporting the permission mapping —
+	// typically links to the Terraform provider source and the GCP IAM
+	// permission reference. The validator requires at least one entry.
+	SourceURLs []string `yaml:"source_urls"`
+	// VerifiedAt is the date verification was performed in YYYY-MM-DD
+	// format. The validator requires a parseable date so the catalog
+	// diagnostics command (Epic 4) can sort entries by verification age
+	// and surface stale mappings.
+	VerifiedAt string `yaml:"verified_at"`
+	// VerifiedProviderVersion is the exact terraform-provider-google
+	// release the verification ran against (e.g. "6.0.0"). Distinct from
+	// TestedAgainstProvider, which is the range the entry is asserted to
+	// hold for; this field captures the single point that was actually
+	// verified.
+	VerifiedProviderVersion string `yaml:"verified_provider_version"`
 }
 
 // Conditional adjusts the base permission set when an attribute on the
@@ -107,10 +171,20 @@ type Verification struct {
 // Permissions are *additive* — the analyzer unions them with the base
 // PermissionSet rather than replacing it. The validator does not require
 // every PermissionSet field to be populated for a Conditional; an empty
-// Plan or Apply means "no extra permissions on this side".
+// list on any stage means "no extra permissions on that stage".
 type Conditional struct {
 	When        map[string]any `yaml:"when"`
 	Permissions PermissionSet  `yaml:"permissions"`
+	// Position is set by the loader from the conditional node's line.
+	Position Position `yaml:"-"`
+}
+
+// DataSourceConditional is the read-only counterpart to Conditional. It
+// shares the same matching semantics but its permissions only contribute
+// to plan, mirroring DataSourcePermissions on the parent entry.
+type DataSourceConditional struct {
+	When        map[string]any        `yaml:"when"`
+	Permissions DataSourcePermissions `yaml:"permissions"`
 	// Position is set by the loader from the conditional node's line.
 	Position Position `yaml:"-"`
 }
@@ -121,26 +195,31 @@ type Conditional struct {
 // Type is the Terraform resource type — populated by the loader from the
 // map key under `resources:` so callers reading a ResourceEntry
 // independently still know which type it describes.
+//
+// TestedAgainstProvider is the provider version range (e.g.
+// ">=5.0.0,<7.0.0") the entry is asserted to hold for. The analyzer can
+// surface a drift warning when a user's provider lockfile falls outside
+// it.
 type ResourceEntry struct {
-	Type         string        `yaml:"-"`
-	Verification Verification  `yaml:"verification"`
-	Permissions  PermissionSet `yaml:"permissions"`
-	Conditionals []Conditional `yaml:"conditionals,omitempty"`
-	Position     Position      `yaml:"-"`
+	Type                  string        `yaml:"-"`
+	Verification          Verification  `yaml:"verification"`
+	Permissions           PermissionSet `yaml:"permissions"`
+	Conditionals          []Conditional `yaml:"conditionals,omitempty"`
+	TestedAgainstProvider string        `yaml:"tested_against_provider"`
+	Position              Position      `yaml:"-"`
 }
 
 // DataSourceEntry is the catalog entry for a Terraform `data` block
-// type. The structure mirrors ResourceEntry; data sources almost
-// always have an empty Apply slice (data sources don't write) but the
-// schema does not enforce that — a data source that triggers a
-// side-effecting list call could legitimately need apply-time
-// permissions.
+// type. Data sources are read-only at the GCP API level, so the
+// permissions and conditional shapes are restricted to plan-only —
+// see DataSourcePermissions and DataSourceConditional.
 type DataSourceEntry struct {
-	Type         string        `yaml:"-"`
-	Verification Verification  `yaml:"verification"`
-	Permissions  PermissionSet `yaml:"permissions"`
-	Conditionals []Conditional `yaml:"conditionals,omitempty"`
-	Position     Position      `yaml:"-"`
+	Type                  string                  `yaml:"-"`
+	Verification          Verification            `yaml:"verification"`
+	Permissions           DataSourcePermissions   `yaml:"permissions"`
+	Conditionals          []DataSourceConditional `yaml:"conditionals,omitempty"`
+	TestedAgainstProvider string                  `yaml:"tested_against_provider"`
+	Position              Position                `yaml:"-"`
 }
 
 // IAMBindingEntry is the catalog entry for an IAM binding/member/policy
@@ -149,15 +228,24 @@ type DataSourceEntry struct {
 // resource type defined in the same merged catalog — the validator
 // enforces the cross-reference.
 //
+// IAM bindings reuse PermissionSet because all four stages are
+// observable: a binding refresh reads the parent's IAM policy (plan),
+// while create / update / delete each call setIamPolicy on the parent.
+// In practice the create / update / delete lists for an IAM binding are
+// identical, but keeping them independent matches the resolver's stage
+// model and leaves room for future provider behaviour where they might
+// diverge.
+//
 // Verification on an IAM binding means "how do I verify the binding
 // applied", not "does the parent exist"; that is the parent's
 // responsibility.
 type IAMBindingEntry struct {
-	Type           string        `yaml:"-"`
-	ParentResource string        `yaml:"parent_resource"`
-	Verification   Verification  `yaml:"verification"`
-	Permissions    PermissionSet `yaml:"permissions"`
-	Position       Position      `yaml:"-"`
+	Type                  string        `yaml:"-"`
+	ParentResource        string        `yaml:"parent_resource"`
+	Verification          Verification  `yaml:"verification"`
+	Permissions           PermissionSet `yaml:"permissions"`
+	TestedAgainstProvider string        `yaml:"tested_against_provider"`
+	Position              Position      `yaml:"-"`
 }
 
 // Catalog is the merged in-memory view of every catalog file. Maps are

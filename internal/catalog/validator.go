@@ -11,27 +11,48 @@ package catalog
 // Error format: every diagnostic begins with the entry's Position so a
 // contributor can locate the issue without grep:
 //
-//   storage.yaml:42: iam_bindings/google_storage_bucket_iam_binding:
-//     parent_resource "google_storage_bucket_does_not_exist" is not a
-//     declared resource type
+//	storage.yaml:42: iam_bindings/google_storage_bucket_iam_binding:
+//	  parent_resource "google_storage_bucket_does_not_exist" is not a
+//	  declared resource type
 //
 // Errors are wrapped with ErrCatalog so callers can use errors.Is to
 // distinguish a schema failure from an underlying I/O error.
+//
+// The full required schema is documented on catalog.go's package
+// doc-comment. The summary the validator enforces:
+//
+//   - verification.method ∈ {empirical, docs+source}
+//   - verification.source_urls is non-empty
+//   - verification.verified_at parses as YYYY-MM-DD
+//   - verification.verified_provider_version is non-empty
+//   - tested_against_provider is non-empty
+//   - permissions.plan is non-empty (resources / data sources / iam bindings)
+//   - all permission strings are non-empty after trimming
+//   - data_sources permissions only carry plan (the type system enforces
+//     this — DataSourcePermissions has only a Plan field)
+//   - iam_bindings.parent_resource refers to a declared resource type
 
 import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // validVerificationMethods is the canonical lookup of accepted
 // VerificationMethod values. Keep in sync with the VerificationMethod*
 // consts in catalog.go.
 var validVerificationMethods = map[VerificationMethod]struct{}{
-	VerificationMethodGcloud:    {},
-	VerificationMethodREST:      {},
-	VerificationMethodTerraform: {},
+	VerificationMethodEmpirical:  {},
+	VerificationMethodDocsSource: {},
 }
+
+// verifiedAtLayout is the date format expected for Verification.VerifiedAt.
+// We pin to a single representation rather than time.RFC3339 because
+// catalog entries record verification on a date granularity (the
+// contributor ran terraform apply on day X) and a wall-clock timestamp
+// would imply a precision the entry does not actually have.
+const verifiedAtLayout = "2006-01-02"
 
 // validate runs strict schema checks on a fully-merged Catalog and
 // returns the first error encountered, wrapped with ErrCatalog so
@@ -41,21 +62,6 @@ var validVerificationMethods = map[VerificationMethod]struct{}{
 // Iteration order is deterministic — entries are visited in
 // lexicographic key order — so a deterministic-test asserting the
 // "first error" reported is stable across runs.
-//
-// Validation rules per entry kind:
-//
-//	resources:
-//	  - verification.method must be a recognised value
-//	  - permissions.plan must be present and non-empty
-//	  - each conditional must have a non-empty `when` map
-//	  - permission strings must be non-empty after trimming
-//
-//	data_sources: same rules as resources.
-//
-//	iam_bindings:
-//	  - parent_resource must be set and refer to a declared resource
-//	  - verification.method must be recognised
-//	  - permissions.plan must be present and non-empty
 //
 // The validator stops at the first error rather than aggregating; the
 // loader is normally consumed by a CI step that fails fast and a single
@@ -87,6 +93,9 @@ func validateResourceEntry(e *ResourceEntry) error {
 	if err := validateVerification(e.Verification, loc); err != nil {
 		return err
 	}
+	if err := validateTestedAgainstProvider(e.TestedAgainstProvider, loc); err != nil {
+		return err
+	}
 	if err := validatePermissionSet(e.Permissions, loc, true /*planRequired*/); err != nil {
 		return err
 	}
@@ -104,12 +113,15 @@ func validateDataSourceEntry(e *DataSourceEntry) error {
 	if err := validateVerification(e.Verification, loc); err != nil {
 		return err
 	}
-	if err := validatePermissionSet(e.Permissions, loc, true /*planRequired*/); err != nil {
+	if err := validateTestedAgainstProvider(e.TestedAgainstProvider, loc); err != nil {
+		return err
+	}
+	if err := validateDataSourcePermissions(e.Permissions, loc); err != nil {
 		return err
 	}
 	for i, c := range e.Conditionals {
 		condLoc := fmt.Sprintf("%s: data_sources/%s/conditionals[%d]", c.Position, e.Type, i)
-		if err := validateConditional(c, condLoc); err != nil {
+		if err := validateDataSourceConditional(c, condLoc); err != nil {
 			return err
 		}
 	}
@@ -119,6 +131,9 @@ func validateDataSourceEntry(e *DataSourceEntry) error {
 func validateIAMBindingEntry(e *IAMBindingEntry, cat *Catalog) error {
 	loc := fmt.Sprintf("%s: iam_bindings/%s", e.Position, e.Type)
 	if err := validateVerification(e.Verification, loc); err != nil {
+		return err
+	}
+	if err := validateTestedAgainstProvider(e.TestedAgainstProvider, loc); err != nil {
 		return err
 	}
 	if err := validatePermissionSet(e.Permissions, loc, true /*planRequired*/); err != nil {
@@ -156,26 +171,88 @@ func validateVerification(v Verification, loc string) error {
 			ErrCatalog, loc, v.Method, known,
 		)
 	}
+	if len(v.SourceURLs) == 0 {
+		return fmt.Errorf("%w: %s: verification.source_urls must contain at least one citation", ErrCatalog, loc)
+	}
+	for i, u := range v.SourceURLs {
+		if strings.TrimSpace(u) == "" {
+			return fmt.Errorf("%w: %s: verification.source_urls[%d] is empty", ErrCatalog, loc, i)
+		}
+	}
+	if strings.TrimSpace(v.VerifiedAt) == "" {
+		return fmt.Errorf("%w: %s: verification.verified_at is required (YYYY-MM-DD)", ErrCatalog, loc)
+	}
+	if _, err := time.Parse(verifiedAtLayout, v.VerifiedAt); err != nil {
+		return fmt.Errorf(
+			"%w: %s: verification.verified_at %q is not a valid YYYY-MM-DD date: %w",
+			ErrCatalog, loc, v.VerifiedAt, err,
+		)
+	}
+	if strings.TrimSpace(v.VerifiedProviderVersion) == "" {
+		return fmt.Errorf("%w: %s: verification.verified_provider_version is required", ErrCatalog, loc)
+	}
+	return nil
+}
+
+// validateTestedAgainstProvider enforces that an entry declares the
+// provider version range it was verified against. The format is
+// intentionally not parsed — the catalog accepts any non-empty
+// constraint expression (e.g. ">=5.0.0,<7.0.0", "~> 6.0", "6.x") so the
+// catalog can match whatever convention the surrounding tooling is
+// using. The diagnostics command will surface the raw string to the
+// user; pinning a single grammar here would force a contributor whose
+// project uses a different idiom to translate.
+func validateTestedAgainstProvider(v string, loc string) error {
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("%w: %s: tested_against_provider is required", ErrCatalog, loc)
+	}
 	return nil
 }
 
 // validatePermissionSet enforces that all permission identifiers are
 // non-empty post-trim. When planRequired is true (the default for
-// resource / data source / iam binding entries) Plan must contain at
-// least one permission; passing planRequired=false is reserved for
-// conditionals, where an empty Plan means "no extra plan permissions".
+// resource / iam binding entries) Plan must contain at least one
+// permission; passing planRequired=false is reserved for conditionals,
+// where an empty Plan means "no extra plan permissions".
+//
+// All four stages (Plan / Create / Update / Delete) are checked for
+// blank entries so a typo or stray empty list element is rejected up
+// front rather than silently propagating into the resolver's union.
 func validatePermissionSet(p PermissionSet, loc string, planRequired bool) error {
 	if planRequired && len(p.Plan) == 0 {
+		return fmt.Errorf("%w: %s: permissions.plan must contain at least one permission", ErrCatalog, loc)
+	}
+	stages := []struct {
+		name string
+		list []string
+	}{
+		{"plan", p.Plan},
+		{"create", p.Create},
+		{"update", p.Update},
+		{"delete", p.Delete},
+	}
+	for _, s := range stages {
+		for i, perm := range s.list {
+			if strings.TrimSpace(perm) == "" {
+				return fmt.Errorf("%w: %s: permissions.%s[%d] is empty", ErrCatalog, loc, s.name, i)
+			}
+		}
+	}
+	return nil
+}
+
+// validateDataSourcePermissions enforces the read-only invariant on data
+// sources: Plan is required and non-empty. The struct shape itself
+// already prevents create / update / delete from being expressed at all
+// — strict YAML decoding rejects those fields on a data source — so the
+// validator only checks Plan.
+func validateDataSourcePermissions(p DataSourcePermissions, loc string) error {
+	if len(p.Plan) == 0 {
 		return fmt.Errorf("%w: %s: permissions.plan must contain at least one permission", ErrCatalog, loc)
 	}
 	for i, perm := range p.Plan {
 		if strings.TrimSpace(perm) == "" {
 			return fmt.Errorf("%w: %s: permissions.plan[%d] is empty", ErrCatalog, loc, i)
-		}
-	}
-	for i, perm := range p.Apply {
-		if strings.TrimSpace(perm) == "" {
-			return fmt.Errorf("%w: %s: permissions.apply[%d] is empty", ErrCatalog, loc, i)
 		}
 	}
 	return nil
@@ -187,23 +264,53 @@ func validatePermissionSet(p PermissionSet, loc string, planRequired bool) error
 // permissions on the parent entry.
 //
 // `permissions` on a conditional is checked with planRequired=false:
-// an additive conditional may legitimately add only Apply-time
-// permissions (e.g. a flag that triggers an update call but not a
-// read).
+// an additive conditional may legitimately add only update-time
+// permissions (e.g. a flag that triggers an update call but not a read).
+// At least one stage must contribute a permission though — a
+// conditional that adds nothing is a footgun.
 func validateConditional(c Conditional, loc string) error {
-	if len(c.When) == 0 {
-		return fmt.Errorf("%w: %s: when clause must have at least one predicate", ErrCatalog, loc)
-	}
-	for k := range c.When {
-		if strings.TrimSpace(k) == "" {
-			return fmt.Errorf("%w: %s: when clause has empty key", ErrCatalog, loc)
-		}
+	if err := validateWhen(c.When, loc); err != nil {
+		return err
 	}
 	if err := validatePermissionSet(c.Permissions, loc, false /*planRequired*/); err != nil {
 		return err
 	}
-	if len(c.Permissions.Plan) == 0 && len(c.Permissions.Apply) == 0 {
+	if len(c.Permissions.Plan) == 0 &&
+		len(c.Permissions.Create) == 0 &&
+		len(c.Permissions.Update) == 0 &&
+		len(c.Permissions.Delete) == 0 {
 		return fmt.Errorf("%w: %s: conditional must add at least one permission", ErrCatalog, loc)
+	}
+	return nil
+}
+
+// validateDataSourceConditional applies the same rules as
+// validateConditional but on the read-only DataSourcePermissions shape.
+func validateDataSourceConditional(c DataSourceConditional, loc string) error {
+	if err := validateWhen(c.When, loc); err != nil {
+		return err
+	}
+	for i, perm := range c.Permissions.Plan {
+		if strings.TrimSpace(perm) == "" {
+			return fmt.Errorf("%w: %s: permissions.plan[%d] is empty", ErrCatalog, loc, i)
+		}
+	}
+	if len(c.Permissions.Plan) == 0 {
+		return fmt.Errorf("%w: %s: conditional must add at least one permission", ErrCatalog, loc)
+	}
+	return nil
+}
+
+// validateWhen is the shared predicate check used by both conditional
+// types: a non-empty map with no blank keys.
+func validateWhen(when map[string]any, loc string) error {
+	if len(when) == 0 {
+		return fmt.Errorf("%w: %s: when clause must have at least one predicate", ErrCatalog, loc)
+	}
+	for k := range when {
+		if strings.TrimSpace(k) == "" {
+			return fmt.Errorf("%w: %s: when clause has empty key", ErrCatalog, loc)
+		}
 	}
 	return nil
 }

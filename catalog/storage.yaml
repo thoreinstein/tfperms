@@ -11,20 +11,30 @@
 # Permission strings are GCP IAM permission identifiers
 # (service.resource.verb), NOT roles. Roles are constructed downstream
 # by the analyzer from these permissions.
+#
+# Every entry MUST carry full verification provenance — see
+# CONTRIBUTING.md for the catalog verification procedure.
 
 resources:
   google_storage_bucket:
     verification:
-      method: gcloud
-      command: "gcloud storage buckets describe gs://{name}"
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/storage/docs/access-control/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/resource_storage_bucket.go
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
+      # Bucket reads happen during refresh.
       plan:
-        # Bucket reads happen during refresh.
         - storage.buckets.get
-      apply:
+      create:
         - storage.buckets.create
-        - storage.buckets.delete
+      update:
         - storage.buckets.update
+      delete:
+        - storage.buckets.delete
     conditionals:
       # Bucket-level IAM is only managed when uniform_bucket_level_access
       # is true; without it, ACLs are the surface and IAM permissions
@@ -34,20 +44,29 @@ resources:
         permissions:
           plan:
             - storage.buckets.getIamPolicy
-          apply:
+          create:
+            - storage.buckets.setIamPolicy
+          update:
             - storage.buckets.setIamPolicy
 
   google_storage_bucket_object:
     verification:
-      method: gcloud
-      command: "gcloud storage objects describe gs://{bucket}/{name}"
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/storage/docs/access-control/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/resource_storage_bucket_object.go
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan:
         - storage.objects.get
-      apply:
+      create:
         - storage.objects.create
-        - storage.objects.delete
+      update:
         - storage.objects.update
+      delete:
+        - storage.objects.delete
 
 data_sources:
   # Reading bucket metadata for downstream interpolation. No write
@@ -55,39 +74,78 @@ data_sources:
   # level — even refresh on apply only re-reads.
   google_storage_bucket:
     verification:
-      method: gcloud
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/storage/docs/access-control/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/data_source_storage_bucket.go
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan:
         - storage.buckets.get
 
 iam_bindings:
+  # The three IAM binding flavours all pivot on the same underlying API:
+  # plan reads getIamPolicy; create / update / delete each call
+  # setIamPolicy. The lists are repeated across stages by design —
+  # see catalog.go's IAMBindingEntry doc for the rationale.
   google_storage_bucket_iam_binding:
     parent_resource: google_storage_bucket
     verification:
-      method: rest
-      command: "GET https://storage.googleapis.com/storage/v1/b/{bucket}/iam"
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/storage/docs/access-control/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/iam_storage_bucket.go
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan:
         - storage.buckets.getIamPolicy
-      apply:
+      create:
+        - storage.buckets.setIamPolicy
+      update:
+        - storage.buckets.setIamPolicy
+      delete:
         - storage.buckets.setIamPolicy
 
   google_storage_bucket_iam_member:
     parent_resource: google_storage_bucket
     verification:
-      method: rest
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/storage/docs/access-control/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/iam_storage_bucket.go
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan:
         - storage.buckets.getIamPolicy
-      apply:
+      create:
+        - storage.buckets.setIamPolicy
+      update:
+        - storage.buckets.setIamPolicy
+      delete:
         - storage.buckets.setIamPolicy
 
   google_storage_bucket_iam_policy:
     parent_resource: google_storage_bucket
     verification:
-      method: rest
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/storage/docs/access-control/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/iam_storage_bucket.go
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
     permissions:
       plan:
         - storage.buckets.getIamPolicy
-      apply:
+      create:
+        - storage.buckets.setIamPolicy
+      update:
+        - storage.buckets.setIamPolicy
+      delete:
         - storage.buckets.setIamPolicy
