@@ -406,6 +406,66 @@ resources:
 			wantSubs: []string{"tested_against_provider", "latest", "not a recognised version constraint"},
 		},
 		{
+			// Doubled operators like `!!1.2.3` would slip past a
+			// character-class regex (`[<>=!~]*`) because the class
+			// accepts any number of those symbols in any order. The
+			// alternation form rejects them: `!!` is not one of the
+			// seven Terraform-supported operators.
+			name: "tested_against_provider doubled bang operator",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: "!!1.2.3"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"tested_against_provider", "!!1.2.3", "not a recognised version constraint"},
+		},
+		{
+			// `><6.0` is the same kind of character-class hole: two
+			// valid operator characters in an order Terraform never
+			// produces. The alternation regex requires one specific
+			// operator token and rejects the combination.
+			name: "tested_against_provider mixed operator characters",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: "><6.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"tested_against_provider", "><6.0", "not a recognised version constraint"},
+		},
+		{
+			// Terraform supports `~>` (pessimistic constraint) but not
+			// `=~`. A character-class regex would not distinguish the
+			// two; the alternation form does.
+			name: "tested_against_provider reversed pessimistic operator",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: "=~ 5.0"
+    permissions:
+      plan: [storage.buckets.get]
+`,
+			wantSubs: []string{"tested_against_provider", "=~ 5.0", "not a recognised version constraint"},
+		},
+		{
 			// Multi-clause constraints are common (`>=5.0.0,<7.0.0`); a
 			// trailing comma yields an empty clause that should be
 			// rejected as a typo.
@@ -552,6 +612,56 @@ iam_bindings:
 	}
 	if _, err := LoadFS(fs, "."); err != nil {
 		t.Fatalf("LoadFS rejected canonical catalog: %v", err)
+	}
+}
+
+// TestValidateAcceptsTestedAgainstProviderForms is the positive-path
+// counterpart to the new tested_against_provider negative cases. The
+// validator accepts every constraint idiom the catalog has historically
+// allowed, so a regression that tightened the regex too far (e.g.
+// requiring a fully-qualified semver, or rejecting the pessimistic
+// `~>` operator) would surface here.
+//
+// The non-canonical forms — `~> 6.0` (pessimistic with a partial
+// version) and `6.x` (the .x short-form) — are the cases most likely
+// to break under a stricter regex, so they get explicit coverage in
+// addition to the canonical multi-clause `>=5.0.0,<7.0.0` form already
+// exercised by TestValidateAcceptsCanonicalCatalog.
+func TestValidateAcceptsTestedAgainstProviderForms(t *testing.T) {
+	cases := []struct {
+		name       string
+		constraint string
+	}{
+		{name: "canonical multi-clause", constraint: ">=5.0.0,<7.0.0"},
+		{name: "pessimistic with partial version", constraint: "~> 6.0"},
+		{name: "pessimistic without space", constraint: "~>6.0"},
+		{name: "x short-form", constraint: "6.x"},
+		{name: "exact equals", constraint: "= 6.12.0"},
+		{name: "not equals", constraint: "!=5.0.0"},
+		{name: "bare version no operator", constraint: "6.12.0"},
+		{name: "semver pre-release and build", constraint: ">=5.0.0-rc1+build.7"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: "` + tc.constraint + `"
+    permissions:
+      plan: [storage.buckets.get]
+`
+			fs := fstest.MapFS{
+				"x.yaml": &fstest.MapFile{Data: []byte(yaml)},
+			}
+			if _, err := LoadFS(fs, "."); err != nil {
+				t.Fatalf("LoadFS rejected valid constraint %q: %v", tc.constraint, err)
+			}
+		})
 	}
 }
 
