@@ -24,8 +24,21 @@ package catalog
 // line/column information to yaml.Node values; once the data lands in a
 // plain Go struct it is gone. annotateConditionals uses the same trick
 // at the per-conditional level.
+//
+// Strict decoding: both phases reject unknown YAML keys. A misspelled
+// top-level section (e.g. "resource:" instead of "resources:") or a
+// misspelled per-entry field (e.g. "verifications:" instead of
+// "verification:") is a hard load error rather than a silent drop —
+// "strict schema validation" requires that contributor typos surface
+// at CI rather than letting an entry quietly disappear from the merged
+// catalog. yaml.v3 supports strict mode on a Decoder via KnownFields(true);
+// (*yaml.Node).Decode does NOT honor it, so for per-entry decoding we
+// round-trip through yaml.Marshal + yaml.NewDecoder. The round trip is
+// negligible in cost and reuses yaml.v3's own struct-tag enforcement
+// rather than re-implementing key validation by hand.
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"path"
@@ -126,7 +139,9 @@ func LoadFS(fsys fs.FS, dir string) (*Catalog, error) {
 // failures returned by LoadFS.
 func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []byte) error {
 	var raw rawFile
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true) // reject unknown top-level keys (e.g. "resource:" instead of "resources:")
+	if err := dec.Decode(&raw); err != nil {
 		return fmt.Errorf("%w: parse %q: %v", ErrCatalog, file, err)
 	}
 
@@ -144,7 +159,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 		firstSeen[key] = pos
 
 		entry := &ResourceEntry{}
-		if err := node.Decode(entry); err != nil {
+		if err := strictDecodeNode(&node, entry); err != nil {
 			return fmt.Errorf("%w: decode resources/%s in %s: %v", ErrCatalog, typ, file, err)
 		}
 		entry.Type = typ
@@ -167,7 +182,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 		firstSeen[key] = pos
 
 		entry := &DataSourceEntry{}
-		if err := node.Decode(entry); err != nil {
+		if err := strictDecodeNode(&node, entry); err != nil {
 			return fmt.Errorf("%w: decode data_sources/%s in %s: %v", ErrCatalog, typ, file, err)
 		}
 		entry.Type = typ
@@ -190,7 +205,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 		firstSeen[key] = pos
 
 		entry := &IAMBindingEntry{}
-		if err := node.Decode(entry); err != nil {
+		if err := strictDecodeNode(&node, entry); err != nil {
 			return fmt.Errorf("%w: decode iam_bindings/%s in %s: %v", ErrCatalog, typ, file, err)
 		}
 		entry.Type = typ
@@ -199,6 +214,31 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 	}
 
 	return nil
+}
+
+// strictDecodeNode decodes a yaml.Node into out with strict mode enabled
+// (unknown struct fields produce an error). yaml.v3's (*Node).Decode
+// uses an internal decoder that does NOT honor KnownFields, so this
+// helper round-trips through yaml.Marshal + yaml.NewDecoder to engage
+// strict-mode enforcement.
+//
+// The round trip preserves nesting, so unknown keys at any depth — for
+// example a typo'd field inside a Conditional — are reported. The cost
+// is one Marshal and one Decode per entry; for catalogs of tens to a
+// few hundred entries this is negligible at startup.
+//
+// Error wrapping is left to the caller because the call sites already
+// know which entry path the decode is for and produce a more useful
+// message ("decode resources/google_storage_bucket in storage.yaml: ...")
+// than a generic strictDecodeNode-level one would.
+func strictDecodeNode(node *yaml.Node, out any) error {
+	data, err := yaml.Marshal(node)
+	if err != nil {
+		return err
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	return dec.Decode(out)
 }
 
 // sortedKeys returns m's keys in lexicographic order. yaml.Node values
