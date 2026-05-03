@@ -1,0 +1,8 @@
+# Placeholder catalog file. Phase 4 of the catalog implementation
+# replaces this with a comprehensive storage.yaml that exercises every
+# schema feature. Until then this file exists only so //go:embed *.yaml
+# in embed.go has at least one match — the embed directive otherwise
+# fails the build with "no matching files".
+resources: {}
+data_sources: {}
+iam_bindings: {}
