@@ -39,9 +39,11 @@ package catalog
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -74,9 +76,15 @@ func Load() (*Catalog, error) {
 }
 
 // LoadFS is the testable variant of Load. It accepts an fs.FS rooted at
-// dir and reads every *.yaml or *.yml file directly under dir
-// (non-recursively). Tests use this entry point to inject malformed
-// inputs without disturbing the embedded catalog.
+// dir and reads every *.yaml file directly under dir (non-recursively).
+// Tests use this entry point to inject malformed inputs without
+// disturbing the embedded catalog.
+//
+// The .yml extension is intentionally rejected. catalog/embed.go's
+// //go:embed pattern only matches *.yaml, so a contributor adding a
+// `something.yml` file would see it work locally via the disk loader
+// but vanish from the embedded binary. Restricting the loader to a
+// single extension prevents that silent divergence.
 //
 // dir is interpreted relative to fsys; pass "." to read the root of fsys.
 //
@@ -100,7 +108,7 @@ func LoadFS(fsys fs.FS, dir string) (*Catalog, error) {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		if !strings.HasSuffix(name, ".yaml") {
 			continue
 		}
 		files = append(files, name)
@@ -164,7 +172,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 
 		entry := &ResourceEntry{}
 		if err := strictDecodeNode(&node, entry); err != nil {
-			return fmt.Errorf("%w: decode resources/%s in %s: %w", ErrCatalog, typ, file, err)
+			return fmt.Errorf("%w: decode resources/%s: %w", ErrCatalog, typ, rewriteStrictDecodeErr(err, pos))
 		}
 		entry.Type = typ
 		entry.Position = pos
@@ -192,7 +200,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 
 		entry := &DataSourceEntry{}
 		if err := strictDecodeNode(&node, entry); err != nil {
-			return fmt.Errorf("%w: decode data_sources/%s in %s: %w", ErrCatalog, typ, file, err)
+			return fmt.Errorf("%w: decode data_sources/%s: %w", ErrCatalog, typ, rewriteStrictDecodeErr(err, pos))
 		}
 		entry.Type = typ
 		entry.Position = pos
@@ -220,7 +228,7 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 
 		entry := &IAMBindingEntry{}
 		if err := strictDecodeNode(&node, entry); err != nil {
-			return fmt.Errorf("%w: decode iam_bindings/%s in %s: %w", ErrCatalog, typ, file, err)
+			return fmt.Errorf("%w: decode iam_bindings/%s: %w", ErrCatalog, typ, rewriteStrictDecodeErr(err, pos))
 		}
 		entry.Type = typ
 		entry.Position = pos
@@ -242,9 +250,10 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 // few hundred entries this is negligible at startup.
 //
 // Error wrapping is left to the caller because the call sites already
-// know which entry path the decode is for and produce a more useful
-// message ("decode resources/google_storage_bucket in storage.yaml: ...")
-// than a generic strictDecodeNode-level one would.
+// know which entry path the decode is for and run the result through
+// rewriteStrictDecodeErr to anchor diagnostics at the catalog file and
+// line — yaml.v3's TypeError on its own only reports a fragment-
+// relative "line 1" which is misleading without the rewrite.
 func strictDecodeNode(node *yaml.Node, out any) error {
 	data, err := yaml.Marshal(node)
 	if err != nil {
@@ -253,6 +262,39 @@ func strictDecodeNode(node *yaml.Node, out any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	return dec.Decode(out)
+}
+
+// fragmentLineRE matches yaml.v3's "line N: " prefix on individual
+// TypeError messages. The line number is relative to the marshaled
+// fragment strictDecodeNode reparses, not to the original catalog file,
+// so it is misleading on its own and must be replaced.
+var fragmentLineRE = regexp.MustCompile(`^line \d+: `)
+
+// rewriteStrictDecodeErr anchors a strict-decode error from
+// strictDecodeNode at the catalog file and entry-level line captured
+// during the rawFile pass. yaml.v3's KnownFields(true) reports unknown
+// fields with a fragment-relative line ("line 1: field ... not found"),
+// which is unhelpful — the offending field can sit on any line of the
+// real file. Replacing the prefix with the entry's Position keeps the
+// field-name detail (e.g. `field "verifcation" not found`) but points
+// the contributor at a real source location.
+//
+// The yaml.TypeError stays in the chain so callers using errors.As keep
+// programmatic access to the structured error; only the human-readable
+// string is rewritten.
+func rewriteStrictDecodeErr(err error, pos Position) error {
+	if err == nil {
+		return nil
+	}
+	var typeErr *yaml.TypeError
+	if errors.As(err, &typeErr) {
+		rewritten := &yaml.TypeError{Errors: make([]string, len(typeErr.Errors))}
+		for i, msg := range typeErr.Errors {
+			rewritten.Errors[i] = fmt.Sprintf("%s: %s", pos, fragmentLineRE.ReplaceAllString(msg, ""))
+		}
+		return rewritten
+	}
+	return fmt.Errorf("%s: %w", pos, err)
 }
 
 // sortedKeys returns m's keys in lexicographic order. yaml.Node values

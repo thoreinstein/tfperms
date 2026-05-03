@@ -128,12 +128,14 @@ func TestRepositoryCatalogEveryFileContributes(t *testing.T) {
 	}
 }
 
-// listCatalogYAMLFiles returns the *.yaml / *.yml bare filenames in the
-// root of the embedded catalog FS. It mirrors loader.go's file selection
-// (suffix filter, skip directories) so the test compares apples to apples
-// with the Position.File values that the loader stamps onto each entry.
-// If the loader ever moves to subdirectories, both this helper and
-// loader.go will need updating together.
+// listCatalogYAMLFiles returns the *.yaml bare filenames in the root of
+// the embedded catalog FS. It mirrors loader.go's file selection (suffix
+// filter, skip directories) so the test compares apples to apples with
+// the Position.File values that the loader stamps onto each entry. The
+// .yml extension is rejected by both this helper and loader.go to match
+// catalog/embed.go's //go:embed *.yaml pattern; if the loader ever moves
+// to subdirectories or accepts new extensions, all three must change
+// together.
 func listCatalogYAMLFiles() ([]string, error) {
 	entries, err := fs.ReadDir(catalogdata.FS, ".")
 	if err != nil {
@@ -145,7 +147,7 @@ func listCatalogYAMLFiles() ([]string, error) {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		if !strings.HasSuffix(name, ".yaml") {
 			continue
 		}
 		// Bare name matches the Position.File the loader records for

@@ -18,7 +18,12 @@ need to read the Go code to add a catalog entry — the YAML is enough.
 
 ## Adding a new service file
 
-1. Pick a service-level filename (e.g. `pubsub.yaml`).
+1. Pick a service-level filename (e.g. `pubsub.yaml`). Catalog files
+   MUST use the `.yaml` extension — `.yml` is rejected. The embedded
+   `//go:embed` pattern in `catalog/embed.go` only matches `*.yaml`,
+   so a `*.yml` file would work locally via the disk loader but
+   silently vanish from the production binary; the loader rejects the
+   extension up front to keep the two in lockstep.
 2. Copy the structure from `catalog/storage.yaml`. It is intentionally
    the canonical example; every schema feature is exercised at least
    once.
