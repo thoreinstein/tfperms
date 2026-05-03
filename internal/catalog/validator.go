@@ -273,7 +273,7 @@ func validateTestedAgainstProvider(v string, loc string) error {
 	for i, clause := range strings.Split(v, ",") {
 		if strings.TrimSpace(clause) == "" {
 			return fmt.Errorf(
-				"%w: %s: tested_against_provider clause %d is empty",
+				"%w: %s: tested_against_provider clause[%d] is empty",
 				ErrCatalog, loc, i,
 			)
 		}
@@ -398,9 +398,10 @@ func validateDataSourceConditional(c DataSourceConditional, loc string) error {
 //     wrong. The list mirrors internal/parser's metaArgs plus the
 //     well-known nested meta-blocks.
 //
-// Iteration order over `when` is randomised by Go's map runtime, but
-// the validator stops at the first error so the failure surface stays
-// deterministic per fixture.
+// Iteration order over `when` is randomised by Go's map runtime, so
+// the keys are collected and sorted before validation; the first
+// error encountered in that sorted order is returned, which is what
+// keeps the failure surface deterministic per fixture.
 func validateWhen(when map[string]any, loc string) error {
 	if len(when) == 0 {
 		return fmt.Errorf("%w: %s: when clause must have at least one predicate", ErrCatalog, loc)
