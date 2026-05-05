@@ -28,7 +28,8 @@ need to read the Go code to add a catalog entry — the YAML is enough.
    so a `*.yml` file would work locally via the disk loader but
    silently vanish from the production binary; the loader rejects the
    extension up front to keep the two in lockstep.
-2. Generate a stub with `tfperms catalog scaffold <terraform_type>`.
+2. Generate a stub with `go run ./cmd/tfperms catalog scaffold <terraform_type>`
+   (or `./tfperms catalog scaffold <terraform_type>` after `make build`).
    The command derives the service-level filename from the resource
    type's `google_<service>_*` prefix, creates the file if it does
    not exist, and writes a YAML entry with every required schema
@@ -44,9 +45,15 @@ need to read the Go code to add a catalog entry — the YAML is enough.
    conditionals).
 4. Run `make catalog-validate`. This wraps the schema and repository
    consistency tests; a new file with a missing field, an unknown
-   verification method, a dangling `parent_resource`, or a TODO
-   sentinel left in place will fail there with a `<file>:<line>`
-   pointer to the offending node.
+   verification method, or a dangling `parent_resource` will fail
+   there. Most parser-level diagnostics surface as a `<file>:<line>`
+   pointer to the offending node, but several TODO sentinels are
+   only rejected by the repository-level tests in
+   `internal/catalog/repo_test.go` (e.g. provenance source-domain
+   coverage, the empirical / top-tier lock table, lifecycle-list
+   permission locks). Those report logical paths like
+   `resources/<terraform_type>` instead of a source position — read
+   the test name and the entry path together to find the YAML node.
 
 ## Catalog verification procedure
 
@@ -182,9 +189,12 @@ their own machine.
 **1. Scaffold the stub.** From the repository root:
 
 ```sh
-tfperms catalog scaffold google_dataplex_lake
+go run ./cmd/tfperms catalog scaffold google_dataplex_lake
 # created stub for google_dataplex_lake in catalog/dataplex.yaml
 ```
+
+(Equivalent to `./tfperms catalog scaffold google_dataplex_lake` if you
+have already run `make build`.)
 
 The command infers `dataplex.yaml` from the `google_dataplex_*`
 prefix, creates the file (the service had no prior catalog
@@ -434,10 +444,18 @@ service file — must satisfy this checklist before review:
       `internal/catalog/repo_test.go` so any change to a
       `plan`/`create`/`update`/`delete` list is visible in the diff
       next to the YAML change.
-- [ ] **Tier metadata is consistent.** If
-      `verification.method` is `empirical`, the Terraform type also
-      appears in `topTierEmpiricalResources` with a one-line
-      rationale; if it is `docs+source`, it does not.
+- [ ] **Tier metadata is consistent, and empirical is for resources
+      only.** Empirical verification (`verification.method: empirical`)
+      is currently scoped to entries under `resources:`. For new
+      top-tier resources, also add the Terraform type to
+      `topTierEmpiricalResources` (in `internal/catalog/repo_test.go`)
+      with a one-line rationale; for `docs+source` resources, it must
+      not appear there.
+      - Sub-note: do not mark `data_sources:` or `iam_bindings:`
+        entries as `method: empirical` — use `docs+source` instead.
+        `repo_test.go` currently rejects `method: empirical` on data
+        sources and IAM bindings outright, so updating
+        `topTierEmpiricalResources` is not enough.
 - [ ] **No stray TODO sentinels** from `tfperms catalog scaffold`
       remain in the YAML (the validator catches these, but call it
       out in the PR description if you intentionally split the work
