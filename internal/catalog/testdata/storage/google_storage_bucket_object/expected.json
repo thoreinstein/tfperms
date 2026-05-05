@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "storage.objects.get"
+  ],
+  "apply": [
+    "storage.objects.create",
+    "storage.objects.delete",
+    "storage.objects.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

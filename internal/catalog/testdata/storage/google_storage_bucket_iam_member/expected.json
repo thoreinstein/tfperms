@@ -1,0 +1,10 @@
+{
+  "plan": [
+    "storage.buckets.getIamPolicy"
+  ],
+  "apply": [
+    "storage.buckets.setIamPolicy"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
