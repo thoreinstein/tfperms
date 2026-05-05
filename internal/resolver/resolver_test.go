@@ -154,6 +154,167 @@ func TestResolveConditionalDefinitiveMismatchSwallowsUnresolved(t *testing.T) {
 	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
 }
 
+// TestResolveConditionalNumberInt verifies that an `int` literal in a
+// catalog `when:` clause matches a cty.Number attribute carrying the
+// same value. yaml.v3 decodes small integer YAML scalars to Go `int`,
+// so this is the typical numeric-predicate path.
+func TestResolveConditionalNumberInt(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"versioning_count": int(3)},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"versioning_count": cty.NumberIntVal(3),
+		},
+	}}, cat)
+
+	assertSliceEqual(t, "plan", res.Plan, []string{
+		"storage.buckets.get",
+		"storage.buckets.getIamPolicy",
+	})
+	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+}
+
+// TestResolveConditionalNumberInt64Exact pins the precision contract
+// for large integer predicates. yaml.v3 decodes integer literals that
+// overflow `int` into Go `int64`. The previous implementation cast
+// int64 → float64 before comparing, which silently rounded values
+// above 2^53 (float64's integer-exact range): `9007199254740993` and
+// `9007199254740992` would compare equal because both float64-round
+// to 2^53. After the fix, the resolver routes int64 predicates through
+// big.Float.SetInt64, which is exact for the entire int64 range.
+//
+// This test distinguishes the two values: a resource with attribute
+// 9007199254740993 must NOT match a `when:` predicate of
+// 9007199254740992, and vice versa.
+func TestResolveConditionalNumberInt64Exact(t *testing.T) {
+	const (
+		twoTo53     int64 = 1 << 53       // 9007199254740992
+		twoTo53Plus int64 = (1 << 53) + 1 // 9007199254740993
+	)
+
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"quota_limit": twoTo53Plus},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	// Attribute = 2^53 + 1, predicate = 2^53 + 1: must match.
+	exact := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"quota_limit": cty.NumberIntVal(twoTo53Plus),
+		},
+	}}, cat)
+	assertSliceEqual(t, "exact plan", exact.Plan, []string{
+		"storage.buckets.get",
+		"storage.buckets.getIamPolicy",
+	})
+
+	// Attribute = 2^53, predicate = 2^53 + 1: must NOT match. Under the
+	// old float64-cast path both sides would float64-round to 2^53 and
+	// compare equal — that is the regression.
+	off := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"quota_limit": cty.NumberIntVal(twoTo53),
+		},
+	}}, cat)
+	assertSliceEqual(t, "off plan", off.Plan, []string{"storage.buckets.get"})
+}
+
+// TestResolveConditionalNumberFloat64 verifies that a float64 literal
+// in the catalog `when:` clause matches a cty.Number carrying the
+// same fractional value. yaml.v3 decodes scalars with a decimal point
+// or exponent into Go float64.
+func TestResolveConditionalNumberFloat64(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"sample_ratio": float64(0.25)},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"sample_ratio": cty.NumberFloatVal(0.25),
+		},
+	}}, cat)
+
+	assertSliceEqual(t, "plan", res.Plan, []string{
+		"storage.buckets.get",
+		"storage.buckets.getIamPolicy",
+	})
+}
+
+// TestResolveConditionalNumberMismatch verifies that a numeric
+// predicate whose actual value is a definitive mismatch does NOT fire
+// the conditional and does NOT surface anything in Unresolved.
+func TestResolveConditionalNumberMismatch(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"versioning_count": int(3)},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"versioning_count": cty.NumberIntVal(7),
+		},
+	}}, cat)
+
+	// The conditional did not fire — base permissions only.
+	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+}
+
+// TestResolveConditionalNumberWrongType verifies that a numeric
+// predicate compared against a non-Number attribute (e.g. a string
+// that happens to look like a digit) returns false rather than
+// panicking or coercing. The catalog YAML schema gives `when:` values
+// stable Go types; a type mismatch is a definitive non-match, not
+// an unresolved one.
+func TestResolveConditionalNumberWrongType(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"versioning_count": int(3)},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			// String "3" must not equal numeric predicate 3.
+			"versioning_count": cty.StringVal("3"),
+		},
+	}}, cat)
+
+	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+}
+
 // TestResolvePreventDestroy verifies that
 // `lifecycle { prevent_destroy = true }` (surfaced as
 // parser.Resource.PreventDestroy) suppresses the catalog entry's Delete
