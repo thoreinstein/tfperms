@@ -1,0 +1,146 @@
+package main
+
+import (
+	"bytes"
+	"flag"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/thoreinstein/tfperms/internal/catalog"
+)
+
+// updateGolden controls in-place regeneration of the .golden fixture
+// when a deliberate format change lands. Run `go test ./cmd/tfperms
+// -run TestCatalogStatsGolden -update` and inspect the diff before
+// committing. The flag is defined at the file level (not init) because
+// `flag.Bool` returns a pointer that is read inside the test body.
+var updateGolden = flag.Bool("update", false,
+	"regenerate testdata/*.golden fixtures from current renderer output")
+
+// TestCatalogStatsGolden is the format-stability gate for the
+// `catalog stats` renderer. The fixture below is a synthetic
+// CatalogStats — not the result of catalog.Load() — because the
+// renderer's job is to format a CatalogStats deterministically and the
+// production catalog changes on every contributor PR. Pinning a
+// synthetic CatalogStats keeps the assertion sensitive to renderer
+// drift while immune to catalog content drift.
+//
+// The fixture exercises every code path in renderCatalogStats:
+//
+//   - non-zero totals across all three sections,
+//   - multiple services with different empirical / docs+source splits,
+//   - five oldest verifications (the cap exercised),
+//   - one TODO sentinel,
+//   - one drift entry against a non-default reference version.
+//
+// Add a case to the fixture when adding a renderer feature; do not
+// edit the .golden by hand. Use `-update` to regenerate after the
+// fixture changes and review the diff in the same commit.
+func TestCatalogStatsGolden(t *testing.T) {
+	stats := catalog.CatalogStats{
+		TotalResources:   3,
+		TotalDataSources: 1,
+		TotalIAMBindings: 1,
+		ReferenceVersion: "6.15.0",
+		Services: []catalog.ServiceStats{
+			{Service: "compute", Total: 2, Empirical: 1, DocsSource: 1},
+			{Service: "storage", Total: 3, Empirical: 0, DocsSource: 3},
+		},
+		OldestVerified: []catalog.AgingEntry{
+			{
+				Section:    "resources",
+				Type:       "google_compute_instance",
+				VerifiedAt: "2024-06-01",
+				Position:   catalog.Position{File: "compute.yaml", Line: 12},
+			},
+			{
+				Section:    "resources",
+				Type:       "google_storage_bucket",
+				VerifiedAt: "2025-01-15",
+				Position:   catalog.Position{File: "storage.yaml", Line: 19},
+			},
+			{
+				Section:    "iam_bindings",
+				Type:       "google_storage_bucket_iam_binding",
+				VerifiedAt: "2025-12-15",
+				Position:   catalog.Position{File: "storage.yaml", Line: 94},
+			},
+		},
+		MissingProvenance: []catalog.ProvenanceIssue{
+			{
+				Section:  "resources",
+				Type:     "google_storage_bucket",
+				Field:    "verification.source_urls[0]",
+				Position: catalog.Position{File: "storage.yaml", Line: 19},
+			},
+		},
+		Drifting: []catalog.DriftEntry{
+			{
+				Section:               "resources",
+				Type:                  "google_legacy_resource",
+				TestedAgainstProvider: ">=4.0.0,<5.0.0",
+				Position:              catalog.Position{File: "legacy.yaml", Line: 1},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderCatalogStats(&buf, stats)
+	got := buf.Bytes()
+
+	goldenPath := filepath.Join("testdata", "catalog_stats.golden")
+	if *updateGolden {
+		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
+			t.Fatalf("update golden: %v", err)
+		}
+		return
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v (run with -update to regenerate)", goldenPath, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("renderCatalogStats output diverged from %s.\n--- want ---\n%s\n--- got ---\n%s",
+			goldenPath, want, got)
+	}
+}
+
+// TestCatalogStatsCommandLoadsEmbeddedCatalog is the end-to-end
+// counterpart to TestCatalogStatsGolden: it exercises the cobra
+// wiring against the actual embedded catalog and asserts that the
+// command exits cleanly and produces output whose structural anchors
+// match what the renderer promises. Content (counts, service names)
+// is not asserted because the embedded catalog evolves — that is what
+// the golden fixture pins.
+func TestCatalogStatsCommandLoadsEmbeddedCatalog(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"catalog", "stats"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	// Section headers are stable contract — if any disappears the
+	// renderer regressed. Content (counts, service names) is locked
+	// elsewhere via the synthetic-fixture golden.
+	wantHeaders := []string{
+		"tfperms catalog stats",
+		"Totals:",
+		"Coverage by service:",
+		"Oldest verifications",
+		"Missing provenance",
+		"Drift from provider",
+	}
+	output := out.String()
+	for _, h := range wantHeaders {
+		if !strings.Contains(output, h) {
+			t.Errorf("output missing %q header.\noutput:\n%s", h, output)
+		}
+	}
+}
