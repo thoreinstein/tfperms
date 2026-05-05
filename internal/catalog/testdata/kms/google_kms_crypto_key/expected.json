@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "cloudkms.cryptoKeys.get"
+  ],
+  "apply": [
+    "cloudkms.cryptoKeyVersions.destroy",
+    "cloudkms.cryptoKeys.create",
+    "cloudkms.cryptoKeys.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

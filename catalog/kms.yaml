@@ -1,0 +1,56 @@
+# Cloud KMS permission catalog.
+#
+# Verified via the docs+source procedure (CONTRIBUTING.md): the
+# provider source was cross-referenced with the Cloud KMS IAM
+# permission reference and one IAM permission was mapped per
+# Terraform lifecycle stage.
+#
+# KMS resources have unusual lifecycles relative to the rest of GCP:
+#
+#   - Key rings cannot be deleted. Cloud KMS does not expose a
+#     keyRings.delete permission; the Terraform provider treats a
+#     destroy as "drop from state" and emits no API call. Update is
+#     also unavailable — key rings carry no mutable fields.
+#   - Crypto keys cannot be deleted either. The provider's destroy
+#     path schedules destruction of the primary version (which the
+#     IAM model treats as cryptoKeyVersions.destroy) and removes the
+#     resource from state; the key itself remains.
+
+resources:
+  google_kms_key_ring:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/kms/docs/reference/permissions-and-roles
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/kms/resource_kms_key_ring.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - cloudkms.keyRings.get
+      create:
+        - cloudkms.keyRings.create
+      update: []
+      delete: []
+
+  google_kms_crypto_key:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/kms/docs/reference/permissions-and-roles
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/kms/resource_kms_crypto_key.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - cloudkms.cryptoKeys.get
+      create:
+        - cloudkms.cryptoKeys.create
+      update:
+        - cloudkms.cryptoKeys.update
+      # Provider's destroy path schedules destruction of the primary
+      # key version. The key itself is not deleted by Cloud KMS.
+      delete:
+        - cloudkms.cryptoKeyVersions.destroy

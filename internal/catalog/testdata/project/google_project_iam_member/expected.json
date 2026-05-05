@@ -1,0 +1,10 @@
+{
+  "plan": [
+    "resourcemanager.projects.getIamPolicy"
+  ],
+  "apply": [
+    "resourcemanager.projects.setIamPolicy"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

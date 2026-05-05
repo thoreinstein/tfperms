@@ -419,6 +419,61 @@ func TestRepositoryCatalogPermissionsAreLocked(t *testing.T) {
 			update: []string{"cloudsql.instances.update"},
 			delete: []string{"cloudsql.instances.delete"},
 		},
+		"google_kms_key_ring": {
+			plan:   []string{"cloudkms.keyRings.get"},
+			create: []string{"cloudkms.keyRings.create"},
+			// Key rings carry no mutable fields and Cloud KMS does
+			// not expose a keyRings.delete permission.
+			update: []string{},
+			delete: []string{},
+		},
+		"google_kms_crypto_key": {
+			plan:   []string{"cloudkms.cryptoKeys.get"},
+			create: []string{"cloudkms.cryptoKeys.create"},
+			update: []string{"cloudkms.cryptoKeys.update"},
+			delete: []string{"cloudkms.cryptoKeyVersions.destroy"},
+		},
+		"google_secret_manager_secret": {
+			plan:   []string{"secretmanager.secrets.get"},
+			create: []string{"secretmanager.secrets.create"},
+			update: []string{"secretmanager.secrets.update"},
+			delete: []string{"secretmanager.secrets.delete"},
+		},
+		"google_secret_manager_secret_version": {
+			plan:   []string{"secretmanager.versions.get"},
+			create: []string{"secretmanager.versions.add"},
+			update: []string{
+				"secretmanager.versions.disable",
+				"secretmanager.versions.enable",
+			},
+			delete: []string{"secretmanager.versions.destroy"},
+		},
+		"google_artifact_registry_repository": {
+			plan:   []string{"artifactregistry.repositories.get"},
+			create: []string{"artifactregistry.repositories.create"},
+			update: []string{"artifactregistry.repositories.update"},
+			delete: []string{"artifactregistry.repositories.delete"},
+		},
+		"google_service_account": {
+			plan:   []string{"iam.serviceAccounts.get"},
+			create: []string{"iam.serviceAccounts.create"},
+			update: []string{"iam.serviceAccounts.update"},
+			delete: []string{"iam.serviceAccounts.delete"},
+		},
+		"google_service_account_key": {
+			plan:   []string{"iam.serviceAccountKeys.get"},
+			create: []string{"iam.serviceAccountKeys.create"},
+			// Keys are immutable in the IAM service; rotation is
+			// delete-then-create.
+			update: []string{},
+			delete: []string{"iam.serviceAccountKeys.delete"},
+		},
+		"google_project": {
+			plan:   []string{"resourcemanager.projects.get"},
+			create: []string{"resourcemanager.projects.create"},
+			update: []string{"resourcemanager.projects.update"},
+			delete: []string{"resourcemanager.projects.delete"},
+		},
 	}
 
 	expectedDataSources := map[string]expectedDataSource{
@@ -454,6 +509,30 @@ func TestRepositoryCatalogPermissionsAreLocked(t *testing.T) {
 			create: []string{"storage.buckets.setIamPolicy"},
 			update: []string{"storage.buckets.setIamPolicy"},
 			delete: []string{"storage.buckets.setIamPolicy"},
+		},
+		// All three project-level IAM-binding flavours go through
+		// resourcemanager.projects.{getIamPolicy,setIamPolicy}. Listed
+		// per-flavour to keep the lock granular.
+		"google_project_iam_binding": {
+			parent: "google_project",
+			plan:   []string{"resourcemanager.projects.getIamPolicy"},
+			create: []string{"resourcemanager.projects.setIamPolicy"},
+			update: []string{"resourcemanager.projects.setIamPolicy"},
+			delete: []string{"resourcemanager.projects.setIamPolicy"},
+		},
+		"google_project_iam_member": {
+			parent: "google_project",
+			plan:   []string{"resourcemanager.projects.getIamPolicy"},
+			create: []string{"resourcemanager.projects.setIamPolicy"},
+			update: []string{"resourcemanager.projects.setIamPolicy"},
+			delete: []string{"resourcemanager.projects.setIamPolicy"},
+		},
+		"google_project_iam_policy": {
+			parent: "google_project",
+			plan:   []string{"resourcemanager.projects.getIamPolicy"},
+			create: []string{"resourcemanager.projects.setIamPolicy"},
+			update: []string{"resourcemanager.projects.setIamPolicy"},
+			delete: []string{"resourcemanager.projects.setIamPolicy"},
 		},
 	}
 

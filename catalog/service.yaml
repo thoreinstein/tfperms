@@ -1,0 +1,50 @@
+# Service Account / IAM permission catalog.
+#
+# google_service_account and google_service_account_key route to this
+# file under the project's InferServicePath convention
+# (google_<service>_* → <service>.yaml, the first underscore segment
+# after `google_` becoming the filename). Verified via the docs+source
+# procedure (CONTRIBUTING.md): provider source cross-referenced with
+# the IAM permission reference.
+#
+# Service account keys carry no update permission — keys are immutable
+# in the IAM service. Any rotation is implemented as
+# delete-then-create.
+
+resources:
+  google_service_account:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/iam/docs/permissions-reference
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/resourcemanager/resource_google_service_account.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - iam.serviceAccounts.get
+      create:
+        - iam.serviceAccounts.create
+      update:
+        - iam.serviceAccounts.update
+      delete:
+        - iam.serviceAccounts.delete
+
+  google_service_account_key:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/iam/docs/permissions-reference
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/resourcemanager/resource_google_service_account_key.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - iam.serviceAccountKeys.get
+      create:
+        - iam.serviceAccountKeys.create
+      update: []
+      delete:
+        - iam.serviceAccountKeys.delete

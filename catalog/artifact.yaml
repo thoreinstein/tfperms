@@ -1,0 +1,25 @@
+# Artifact Registry permission catalog.
+#
+# Verified via the docs+source procedure (CONTRIBUTING.md). Only the
+# repository resource is in scope today; per-image / per-tag resources
+# are tracked as long-tail entries.
+
+resources:
+  google_artifact_registry_repository:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/artifact-registry/docs/access-control
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/artifactregistry/resource_artifact_registry_repository.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - artifactregistry.repositories.get
+      create:
+        - artifactregistry.repositories.create
+      update:
+        - artifactregistry.repositories.update
+      delete:
+        - artifactregistry.repositories.delete

@@ -1,0 +1,10 @@
+{
+  "plan": [
+    "cloudkms.keyRings.get"
+  ],
+  "apply": [
+    "cloudkms.keyRings.create"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
