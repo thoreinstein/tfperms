@@ -4,17 +4,20 @@ package main
 // from main.go so the root-level command stays focused on version / help
 // concerns. Subcommands under `catalog` operate on the YAML files under
 // the repository's `catalog/` directory: `scaffold` writes a stub for a
-// new entry, future siblings (stats, versions) will read existing
-// entries.
+// new entry, `stats` summarises the merged in-memory catalog.
 //
-// All filesystem work lives in internal/catalog/scaffold.go — this file
-// is the cobra wiring only. Keeping the wiring thin lets the scaffold
-// logic be unit-tested without spinning up a cobra command, and it keeps
-// all "where on disk does this go" decisions in one place.
+// All filesystem and aggregation work lives under internal/catalog/ —
+// this file is the cobra wiring only. Keeping the wiring thin lets the
+// underlying logic be unit-tested without spinning up a cobra command,
+// and it keeps all "where on disk does this go" / "what counts as
+// drift" decisions in one place.
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
+	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/thoreinstein/tfperms/internal/catalog"
@@ -31,11 +34,150 @@ func newCatalogCmd() *cobra.Command {
 		Short: "Manage and inspect the tfperms permission catalog",
 		Long: "catalog provides subcommands for working with the YAML-backed " +
 			"permission catalog under catalog/. Use `catalog scaffold` to " +
-			"emit a stub for a new entry.",
+			"emit a stub for a new entry, or `catalog stats` to inspect " +
+			"catalog health (verification age, missing provenance, drift).",
 	}
 	cmd.AddCommand(newCatalogScaffoldCmd())
+	cmd.AddCommand(newCatalogStatsCmd())
 	return cmd
 }
+
+// newCatalogStatsCmd returns `tfperms catalog stats`.
+//
+// The command loads the embedded catalog (going through catalog.Load()
+// to share the strict validation pipeline used at production startup),
+// computes the diagnostic snapshot via catalog.ComputeStats, and
+// renders the snapshot to stdout in a deterministic, golden-file-
+// friendly layout. There are no flags today; the report shape is
+// fixed by the underlying CatalogStats type, and any future variants
+// (--json, --service=storage) belong on this command rather than as
+// new top-level subcommands.
+//
+// Errors from catalog.Load() (a malformed YAML, a schema violation)
+// are surfaced verbatim — the same as `tfperms` startup would surface
+// them — so the user has one consistent diagnostic vocabulary across
+// commands.
+func newCatalogStatsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "stats",
+		Short: "Print health statistics for the embedded catalog",
+		Long: "Aggregate and print catalog-level diagnostics: per-section totals, " +
+			"per-service coverage (empirical vs docs+source), the five oldest " +
+			"verifications, missing provenance markers (TODO sentinels), and " +
+			"entries whose tested_against_provider clauses exclude the current " +
+			"reference provider version.",
+		Args: cobra.NoArgs,
+		// SilenceUsage matches catalog scaffold: the trailing usage
+		// block is irrelevant once we are past argument parsing, and
+		// suppressing it keeps the user's eye on the actual error.
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat, err := catalog.Load()
+			if err != nil {
+				return err
+			}
+			stats := catalog.ComputeStats(cat, catalog.DefaultReferenceVersion)
+			renderCatalogStats(cmd.OutOrStdout(), stats)
+			return nil
+		},
+	}
+	return cmd
+}
+
+// renderCatalogStats writes a deterministic multi-section report
+// derived from stats to w. The format is fixed (no flags adjust it)
+// so a golden-file test can pin it: deviations from the layout below
+// — header text, section ordering, column ordering, padding rules —
+// are user-visible changes and require updating the golden fixture in
+// the same diff.
+//
+// The five sections are printed in the order:
+//
+//  1. Totals
+//  2. Coverage by service
+//  3. Oldest verifications
+//  4. Missing provenance
+//  5. Drift
+//
+// Each section ends with a single blank line so the overall report
+// reads as a sequence of paragraphs. Empty sections still print a
+// header followed by "(none)" so a reader skimming the output cannot
+// mistake "no drift" for "drift section was omitted by accident".
+func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) {
+	fmt.Fprintln(w, "tfperms catalog stats")
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "Totals:")
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "  resources\t%d\n", stats.TotalResources)
+	fmt.Fprintf(tw, "  data_sources\t%d\n", stats.TotalDataSources)
+	fmt.Fprintf(tw, "  iam_bindings\t%d\n", stats.TotalIAMBindings)
+	_ = tw.Flush()
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "Coverage by service:")
+	if len(stats.Services) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	} else {
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  service\ttotal\tempirical\tdocs+source")
+		for _, s := range stats.Services {
+			fmt.Fprintf(tw, "  %s\t%d\t%d\t%d\n",
+				s.Service, s.Total, s.Empirical, s.DocsSource)
+		}
+		_ = tw.Flush()
+	}
+	fmt.Fprintln(w)
+
+	fmt.Fprintf(w, "Oldest verifications (up to %d):\n", catalogOldestLimit)
+	if len(stats.OldestVerified) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	} else {
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, e := range stats.OldestVerified {
+			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
+				e.Position, e.Section, e.Type, e.VerifiedAt)
+		}
+		_ = tw.Flush()
+	}
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "Missing provenance (TODO sentinels):")
+	if len(stats.MissingProvenance) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	} else {
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, p := range stats.MissingProvenance {
+			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
+				p.Position, p.Section, p.Type, p.Field)
+		}
+		_ = tw.Flush()
+	}
+	fmt.Fprintln(w)
+
+	driftHeader := "Drift from provider " + stats.ReferenceVersion + ":"
+	if strings.TrimSpace(stats.ReferenceVersion) == "" {
+		driftHeader = "Drift (disabled — no reference version):"
+	}
+	fmt.Fprintln(w, driftHeader)
+	if len(stats.Drifting) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	} else {
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, d := range stats.Drifting {
+			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
+				d.Position, d.Section, d.Type, d.TestedAgainstProvider)
+		}
+		_ = tw.Flush()
+	}
+}
+
+// catalogOldestLimit mirrors the cap inside ComputeStats (its
+// oldestVerifiedLimit constant is package-private). Repeating the
+// number locally keeps the renderer self-contained while the doc-
+// comment ties them together; if either is bumped, the other must be
+// updated in the same diff so the header text matches the data.
+const catalogOldestLimit = 5
 
 // newCatalogScaffoldCmd returns `tfperms catalog scaffold <resource-type>`.
 //
