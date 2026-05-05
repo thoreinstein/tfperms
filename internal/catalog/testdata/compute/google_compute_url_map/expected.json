@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.urlMaps.get"
+  ],
+  "apply": [
+    "compute.urlMaps.create",
+    "compute.urlMaps.delete",
+    "compute.urlMaps.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

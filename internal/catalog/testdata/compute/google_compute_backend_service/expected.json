@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.backendServices.get"
+  ],
+  "apply": [
+    "compute.backendServices.create",
+    "compute.backendServices.delete",
+    "compute.backendServices.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

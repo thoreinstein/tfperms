@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.healthChecks.get"
+  ],
+  "apply": [
+    "compute.healthChecks.create",
+    "compute.healthChecks.delete",
+    "compute.healthChecks.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

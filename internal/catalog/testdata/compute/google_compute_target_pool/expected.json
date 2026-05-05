@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.targetPools.get"
+  ],
+  "apply": [
+    "compute.targetPools.create",
+    "compute.targetPools.delete",
+    "compute.targetPools.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
