@@ -54,11 +54,28 @@ Every catalog entry MUST carry provenance. The `verification` block
 records four required fields — `method`, `source_urls`, `verified_at`,
 and `verified_provider_version` — and updates without them are
 rejected by the validator and by review. `verified_at` is a
-`YYYY-MM-DD` date that must fall on or after **2024-01-01** (the
-catalog's project floor; see `provenanceFloorDate` in
-`internal/catalog/repo_test.go`) and within seven days of the
-contributor's wall clock. Obvious stub dates (`0001-01-01`,
-`1970-01-01`, `2099-01-01`, ...) are rejected explicitly.
+`YYYY-MM-DD` date that must fall inside a fixed window enforced by
+`TestRepositoryCatalogVerificationProvenanceComplete` in
+`internal/catalog/repo_test.go`:
+
+- **Floor:** on or after **2024-01-01** (`provenanceFloorDate`, the
+  catalog's project floor — chosen as a fixed wall-clock-independent
+  lower bound so the test is deterministic across CI runs).
+- **Ceiling:** at most **seven days** in the future relative to the
+  test's wall clock at run time (`provenanceCeilingSlack`). The slack
+  exists to absorb timezone differences between a contributor's
+  machine and CI; it is **not** a recency requirement on past dates.
+
+In other words: any past date from 2024-01-01 onward will pass the
+automated test, including dates from previous years. Reviewers — not
+the validator — are responsible for catching stale entries where the
+provider has moved on. Write the actual date the verification ran;
+do not back-date or forward-date.
+
+Obvious stub dates (`0001-01-01`, `1970-01-01`, `2000-01-01`,
+`2099-01-01`, `9999-12-31`) are rejected explicitly via the
+`obviouslyStubVerifiedAt` map. If you genuinely need to update an
+entry, re-run the verification and write today's date.
 
 The two accepted verification methods are:
 
