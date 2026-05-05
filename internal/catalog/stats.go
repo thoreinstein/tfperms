@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultReferenceVersion is the provider version `tfperms catalog
@@ -264,32 +265,37 @@ func serviceFromFile(file string) string {
 // validator already rejects unparseable dates at load time, so this
 // branch is defensive — a hand-rolled fixture that bypasses the
 // validator would otherwise sort to "year zero" and dominate the
-// output.
+// output. Parsing is delegated to verifiedAtLayout (mirroring the
+// validator's contract) so the two stay in lockstep: a date that
+// passes Load() is guaranteed to sort here, and a hand-rolled fixture
+// with a malformed date is silently dropped from this section rather
+// than promoted to the front of the list.
 func computeOldestVerified(cat *Catalog, limit int) []AgingEntry {
 	all := make([]AgingEntry, 0, len(cat.Resources)+len(cat.DataSources)+len(cat.IAMBindings))
-	for _, e := range cat.Resources {
+	add := func(section string, typ string, v Verification, pos Position) {
+		// Skip entries whose verified_at does not match the layout
+		// the validator pinned. A blank or malformed string would
+		// otherwise sort to the head of the slice and dominate the
+		// "oldest" report — exactly the false positive the doc-comment
+		// promises to suppress.
+		if _, err := time.Parse(verifiedAtLayout, v.VerifiedAt); err != nil {
+			return
+		}
 		all = append(all, AgingEntry{
-			Section:    "resources",
-			Type:       e.Type,
-			VerifiedAt: e.Verification.VerifiedAt,
-			Position:   e.Position,
+			Section:    section,
+			Type:       typ,
+			VerifiedAt: v.VerifiedAt,
+			Position:   pos,
 		})
+	}
+	for _, e := range cat.Resources {
+		add("resources", e.Type, e.Verification, e.Position)
 	}
 	for _, e := range cat.DataSources {
-		all = append(all, AgingEntry{
-			Section:    "data_sources",
-			Type:       e.Type,
-			VerifiedAt: e.Verification.VerifiedAt,
-			Position:   e.Position,
-		})
+		add("data_sources", e.Type, e.Verification, e.Position)
 	}
 	for _, e := range cat.IAMBindings {
-		all = append(all, AgingEntry{
-			Section:    "iam_bindings",
-			Type:       e.Type,
-			VerifiedAt: e.Verification.VerifiedAt,
-			Position:   e.Position,
-		})
+		add("iam_bindings", e.Type, e.Verification, e.Position)
 	}
 
 	sort.Slice(all, func(i, j int) bool {
@@ -502,8 +508,18 @@ var constraintClausePattern = regexp.MustCompile(
 //     "obviously out-of-range" version as in-range under-reports drift
 //     rather than over-reports it, which is the safer failure mode for
 //     a diagnostic command.
+//   - Wildcard suffix (`6.x`, `6.0.x`): the validator accepts this
+//     short form (see testedAgainstProviderConstraintPattern). With no
+//     operator (or `=`), the clause matches when reference's leading
+//     components equal the prefix; with `!=`, the inverse. For `>=`
+//     and `~>` the wildcard is a lower bound at the prefix's leading
+//     components — exactly what `>= 6.x` reads as. For `<=`, `>`, `<`
+//     the prefix is treated as a point version (its highest in-range
+//     value is unspecified without semver-aware parsing), which
+//     under-reports drift — same trade-off as `~>`'s missing upper
+//     bound.
 func satisfiesConstraint(reference, constraint string) (bool, bool) {
-	refV, ok := parseVersion(reference)
+	refV, _, ok := parseVersion(reference)
 	if !ok {
 		return false, false
 	}
@@ -517,9 +533,28 @@ func satisfiesConstraint(reference, constraint string) (bool, bool) {
 		if op == "" {
 			op = "="
 		}
-		clauseV, ok := parseVersion(m[2])
+		clauseV, clauseIsPrefix, ok := parseVersion(m[2])
 		if !ok {
 			return false, false
+		}
+		// Prefix constraints redefine equality: `6.x` means "any 6.y.z
+		// matches" rather than "ref == [6]". Comparison-based operators
+		// fall through to compareVersions, which already treats missing
+		// trailing components as zero — so `>= 6.x` evaluates as
+		// `>= 6.0.0…`, the natural reading.
+		if clauseIsPrefix {
+			switch op {
+			case "=":
+				if !versionHasPrefix(refV, clauseV) {
+					return false, true
+				}
+				continue
+			case "!=":
+				if versionHasPrefix(refV, clauseV) {
+					return false, true
+				}
+				continue
+			}
 		}
 		cmp := compareVersions(refV, clauseV)
 		switch op {
@@ -561,12 +596,31 @@ func satisfiesConstraint(reference, constraint string) (bool, bool) {
 // the leading dot-separated digit run is parsed; a trailing
 // "-rc1+build.7" suffix is dropped because the catalog's drift report
 // is concerned with major / minor / patch ordering, not pre-release
-// metadata. Returns ok=false when the string is missing a leading
-// digit or contains no parseable component.
-func parseVersion(s string) ([]int, bool) {
+// metadata.
+//
+// The middle return is true when the string ends in `.x` or `.X` — the
+// short-form wildcard the validator accepts (see
+// testedAgainstProviderConstraintPattern). For `6.x` parseVersion
+// returns ([6], true, true); satisfiesConstraint then redefines `=` to
+// "ref's leading components match the prefix" rather than the strict
+// numeric equality used for non-wildcard versions.
+//
+// Returns ok=false when the string is missing a leading digit or
+// contains no parseable component.
+func parseVersion(s string) ([]int, bool, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil, false
+		return nil, false, false
+	}
+	// Detect the `.x` / `.X` wildcard suffix and strip it before the
+	// numeric parse. The validator only accepts a single trailing
+	// wildcard segment (anything else fails the version-token regex
+	// at load time), so a single HasSuffix check is sufficient — we
+	// do not need to scan for `.x.0` or other malformed shapes.
+	isPrefix := false
+	if strings.HasSuffix(s, ".x") || strings.HasSuffix(s, ".X") {
+		s = s[:len(s)-2]
+		isPrefix = true
 	}
 	// Drop pre-release / build metadata; numeric components stop at
 	// the first non-digit-dot character.
@@ -583,25 +637,48 @@ func parseVersion(s string) ([]int, bool) {
 	}
 	core := s[:end]
 	if core == "" {
-		return nil, false
+		return nil, false, false
 	}
 	parts := strings.Split(core, ".")
 	out := make([]int, 0, len(parts))
 	for _, p := range parts {
 		if p == "" {
 			// Trailing dot or doubled dot — treat as malformed.
-			return nil, false
+			return nil, false, false
 		}
 		n, err := strconv.Atoi(p)
 		if err != nil {
-			return nil, false
+			return nil, false, false
 		}
 		out = append(out, n)
 	}
 	if len(out) == 0 {
-		return nil, false
+		return nil, false, false
 	}
-	return out, true
+	return out, isPrefix, true
+}
+
+// versionHasPrefix reports whether version's leading components equal
+// prefix. A prefix longer than the version is padded on the version
+// side with zeros — same convention compareVersions uses — so the
+// reference `6` matches the prefix `6.0` (both read as `6.0.0…`).
+//
+// This is the comparator that backs `=` and `!=` for wildcard
+// constraints like `6.x`. Strict numeric equality would reject
+// `parseVersion("6.15.0")` against `parseVersion("6.x") = [6]`; this
+// helper accepts the match because the wildcard explicitly opts into
+// "ignore trailing components".
+func versionHasPrefix(version, prefix []int) bool {
+	for i, p := range prefix {
+		var v int
+		if i < len(version) {
+			v = version[i]
+		}
+		if v != p {
+			return false
+		}
+	}
+	return true
 }
 
 // compareVersions is a numeric component comparator. Components beyond
