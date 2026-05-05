@@ -190,6 +190,40 @@ func TestCatalogVersionsRendererPropagatesPlainWriteErrors(t *testing.T) {
 	}
 }
 
+// TestCatalogVersionsRendererSurfacesEmptyConstraint pins the
+// contract between AggregateVersions and the renderer for empty
+// `tested_against_provider` strings. AggregateVersions deliberately
+// preserves empty-constraint groups for in-memory callers (a hand-
+// rolled catalog mid-edit, a downstream JSON consumer) rather than
+// dropping them; a blank table cell at the CLI surface would make the
+// offending row effectively invisible and indistinguishable from
+// formatting damage. The renderer must substitute an explicit
+// `(empty)` placeholder so the row stays visible end-to-end.
+//
+// The fixture is a synthetic []VersionGroup rather than a catalog
+// load: the validator rejects empty constraints at load time, so the
+// only path that drives this branch is an in-memory caller — which is
+// exactly the contract under test.
+func TestCatalogVersionsRendererSurfacesEmptyConstraint(t *testing.T) {
+	groups := []catalog.VersionGroup{
+		{TestedAgainstProvider: ">=6.0.0,<7.0.0", Count: 3},
+		{TestedAgainstProvider: "", Count: 1},
+	}
+
+	var buf bytes.Buffer
+	if err := renderCatalogVersions(&buf, groups); err != nil {
+		t.Fatalf("renderCatalogVersions: %v", err)
+	}
+	got := buf.String()
+
+	if !strings.Contains(got, "(empty)") {
+		t.Errorf("renderCatalogVersions did not surface the empty-constraint "+
+			"placeholder; expected an `(empty)` cell so an empty "+
+			"tested_against_provider stays visible at the CLI surface.\noutput:\n%s",
+			got)
+	}
+}
+
 // TestCatalogVersionsRendererPropagatesShortWrites pins the short-
 // write contract: errWriter must detect writers returning
 // (n < len(p), nil) and surface io.ErrShortWrite, even though such
