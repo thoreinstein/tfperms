@@ -77,8 +77,7 @@ func newCatalogStatsCmd() *cobra.Command {
 				return err
 			}
 			stats := catalog.ComputeStats(cat, catalog.DefaultReferenceVersion)
-			renderCatalogStats(cmd.OutOrStdout(), stats)
-			return nil
+			return renderCatalogStats(cmd.OutOrStdout(), stats)
 		},
 	}
 	return cmd
@@ -103,7 +102,14 @@ func newCatalogStatsCmd() *cobra.Command {
 // reads as a sequence of paragraphs. Empty sections still print a
 // header followed by "(none)" so a reader skimming the output cannot
 // mistake "no drift" for "drift section was omitted by accident".
-func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) {
+//
+// Flush errors from each tabwriter are propagated to the caller. If
+// stdout is a pipe or file and a write fails (e.g. broken pipe, disk
+// full), the command must surface it as a non-zero exit rather than
+// emitting a truncated report under a successful exit code — that
+// would let a CI consumer of `tfperms catalog stats` silently treat
+// partial output as authoritative.
+func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) error {
 	fmt.Fprintln(w, "tfperms catalog stats")
 	fmt.Fprintln(w)
 
@@ -112,7 +118,9 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) {
 	fmt.Fprintf(tw, "  resources\t%d\n", stats.TotalResources)
 	fmt.Fprintf(tw, "  data_sources\t%d\n", stats.TotalDataSources)
 	fmt.Fprintf(tw, "  iam_bindings\t%d\n", stats.TotalIAMBindings)
-	_ = tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush totals: %w", err)
+	}
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "Coverage by service:")
@@ -125,7 +133,9 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) {
 			fmt.Fprintf(tw, "  %s\t%d\t%d\t%d\n",
 				s.Service, s.Total, s.Empirical, s.DocsSource)
 		}
-		_ = tw.Flush()
+		if err := tw.Flush(); err != nil {
+			return fmt.Errorf("flush coverage: %w", err)
+		}
 	}
 	fmt.Fprintln(w)
 
@@ -138,7 +148,9 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) {
 			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
 				e.Position, e.Section, e.Type, e.VerifiedAt)
 		}
-		_ = tw.Flush()
+		if err := tw.Flush(); err != nil {
+			return fmt.Errorf("flush oldest verifications: %w", err)
+		}
 	}
 	fmt.Fprintln(w)
 
@@ -151,7 +163,9 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) {
 			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
 				p.Position, p.Section, p.Type, p.Field)
 		}
-		_ = tw.Flush()
+		if err := tw.Flush(); err != nil {
+			return fmt.Errorf("flush missing provenance: %w", err)
+		}
 	}
 	fmt.Fprintln(w)
 
@@ -168,8 +182,11 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) {
 			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
 				d.Position, d.Section, d.Type, d.TestedAgainstProvider)
 		}
-		_ = tw.Flush()
+		if err := tw.Flush(); err != nil {
+			return fmt.Errorf("flush drift: %w", err)
+		}
 	}
+	return nil
 }
 
 // catalogOldestLimit mirrors the cap inside ComputeStats (its
