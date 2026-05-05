@@ -271,6 +271,30 @@ func TestRepositoryCatalogPermissionsAreLocked(t *testing.T) {
 			update: []string{"compute.subnetworks.update"},
 			delete: []string{"compute.subnetworks.delete"},
 		},
+		"google_bigquery_dataset": {
+			plan:   []string{"bigquery.datasets.get"},
+			create: []string{"bigquery.datasets.create"},
+			update: []string{"bigquery.datasets.update"},
+			delete: []string{"bigquery.datasets.delete"},
+		},
+		"google_bigquery_table": {
+			plan:   []string{"bigquery.tables.get"},
+			create: []string{"bigquery.tables.create"},
+			update: []string{"bigquery.tables.update"},
+			delete: []string{"bigquery.tables.delete"},
+		},
+		"google_pubsub_topic": {
+			plan:   []string{"pubsub.topics.get"},
+			create: []string{"pubsub.topics.create"},
+			update: []string{"pubsub.topics.update"},
+			delete: []string{"pubsub.topics.delete"},
+		},
+		"google_pubsub_subscription": {
+			plan:   []string{"pubsub.subscriptions.get"},
+			create: []string{"pubsub.subscriptions.create"},
+			update: []string{"pubsub.subscriptions.update"},
+			delete: []string{"pubsub.subscriptions.delete"},
+		},
 	}
 
 	expectedDataSources := map[string]expectedDataSource{
@@ -582,10 +606,14 @@ func TestRepositoryCatalogVerificationProvenanceComplete(t *testing.T) {
 // PDR's named examples are tagged with "PDR Epic 4 top-15 example" to
 // make the rationale obvious in test failures.
 var topTierEmpiricalResources = map[string]string{
-	"google_storage_bucket":     "PDR Epic 4 top-15 example",
-	"google_compute_instance":   "PDR Epic 4 top-15 example",
-	"google_compute_network":    "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
-	"google_compute_subnetwork": "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
+	"google_storage_bucket":      "PDR Epic 4 top-15 example",
+	"google_compute_instance":    "PDR Epic 4 top-15 example",
+	"google_compute_network":     "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
+	"google_compute_subnetwork":  "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
+	"google_bigquery_dataset":    "PDR Epic 4 top-15 example",
+	"google_bigquery_table":      "PDR Epic 4 top-15 (paired with google_bigquery_dataset for analytics configs)",
+	"google_pubsub_topic":        "PDR Epic 4 top-15 example",
+	"google_pubsub_subscription": "PDR Epic 4 top-15 (paired with google_pubsub_topic for event-driven configs)",
 }
 
 // TestRepositoryCatalogTopTierResourcesAreEmpirical enforces the Epic
