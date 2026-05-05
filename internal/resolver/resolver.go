@@ -32,8 +32,12 @@
 //   - Surfacing unresolved conditionals: when a gating attribute is
 //     present in the When clause but did not resolve to a literal in
 //     the parser (cty.NilVal) AND no other predicate definitively
-//     fails, the resolver emits a `<type>.<name>: <attribute>` entry
-//     into Resolution.Unresolved so the reporter can flag it.
+//     fails, the resolver emits an entry into Resolution.Unresolved so
+//     the reporter can flag it. The entry key includes the resource's
+//     ModulePath (so a module reused at multiple call sites produces
+//     distinct entries) and a `data.` prefix for `data` blocks (so a
+//     `resource` and `data` block sharing a type/name do not collapse).
+//     See unresolvedKey for the exact format.
 //   - Unknown resource detection: types that match neither Resources,
 //     DataSources, nor IAMBindings surface in Resolution.Unknowns.
 //
@@ -53,9 +57,9 @@
 package resolver
 
 import (
-	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 
 	"github.com/zclconf/go-cty/cty"
 
@@ -87,11 +91,15 @@ import (
 //     blocks contributes one entry.
 //   - Unresolved is the deduplicated, sorted set of conditional
 //     gating attributes that could not be evaluated against a parsed
-//     resource. Each entry is formatted as
-//     "<type>.<name>: <attribute>" (e.g.
-//     "google_storage_bucket.primary: uniform_bucket_level_access")
-//     so the reporter can identify both which resource block and
-//     which attribute the resolver could not pin down.
+//     resource. Entries follow Terraform-ish addressing so two blocks
+//     of the same type/name are never collapsed: the ModulePath
+//     components (if any) are dotted in front, `data` blocks carry a
+//     `data.` prefix segment, and the trailing form is
+//     "<type>.<name>: <attribute>". A root-level resource therefore
+//     reads "google_storage_bucket.primary: uniform_bucket_level_access"
+//     while the same resource inside a reused `module "foo"` reads
+//     "foo.google_storage_bucket.primary: uniform_bucket_level_access".
+//     See unresolvedKey for the construction.
 type Resolution struct {
 	Plan       []string `json:"plan"`
 	Apply      []string `json:"apply"`
@@ -138,7 +146,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Resolution {
 						}
 					}
 					for _, attr := range missing {
-						unresolved[fmt.Sprintf("%s.%s: %s", r.Type, r.Name, attr)] = struct{}{}
+						unresolved[unresolvedKey(r, attr)] = struct{}{}
 					}
 				}
 				continue
@@ -162,7 +170,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Resolution {
 						addAll(plan, cond.Permissions.Plan)
 					}
 					for _, attr := range missing {
-						unresolved[fmt.Sprintf("%s.%s: %s", r.Type, r.Name, attr)] = struct{}{}
+						unresolved[unresolvedKey(r, attr)] = struct{}{}
 					}
 				}
 				continue
@@ -212,6 +220,48 @@ func lookupIAMBinding(cat *catalog.Catalog, typ string) *catalog.IAMBindingEntry
 		return nil
 	}
 	return cat.IAMBindings[typ]
+}
+
+// unresolvedKey formats the dedup / display key for a single
+// (resource, attribute) pair surfaced into Resolution.Unresolved. The
+// shape is Terraform-ish so two blocks that differ only in their
+// instantiation context never collapse into the same entry:
+//
+//   - ModulePath components (when LoadRecursive populated them) are
+//     dotted in front, preserving outer-to-inner traversal order. A
+//     module reused at two call sites therefore produces two
+//     distinct entries even when the inner resource has the same
+//     type/name.
+//   - `data` blocks carry an explicit `data.` segment after the module
+//     path, so a `resource "google_storage_bucket" "x"` and a
+//     `data "google_storage_bucket" "x"` in the same scope do not
+//     collapse.
+//   - The trailing form is "<type>.<name>: <attribute>" — same as the
+//     pre-disambiguation format, so reporters that already pattern-
+//     match the colon separator keep working.
+//
+// Examples:
+//
+//   - Root resource:  "google_storage_bucket.primary: uniform_bucket_level_access"
+//   - Root data:      "data.google_storage_bucket.primary: location"
+//   - Reused module:  "foo.google_storage_bucket.primary: uniform_bucket_level_access"
+//   - Nested module:  "foo.bar.google_storage_bucket.primary: uniform_bucket_level_access"
+//   - Module + data:  "foo.data.google_storage_bucket.primary: location"
+func unresolvedKey(r parser.Resource, attr string) string {
+	var prefix strings.Builder
+	for _, seg := range r.ModulePath {
+		prefix.WriteString(seg)
+		prefix.WriteByte('.')
+	}
+	if r.Kind == "data" {
+		prefix.WriteString("data.")
+	}
+	prefix.WriteString(r.Type)
+	prefix.WriteByte('.')
+	prefix.WriteString(r.Name)
+	prefix.WriteString(": ")
+	prefix.WriteString(attr)
+	return prefix.String()
 }
 
 // matchesConditional evaluates a Conditional / DataSourceConditional
