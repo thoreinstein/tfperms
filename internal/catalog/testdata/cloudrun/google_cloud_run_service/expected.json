@@ -1,0 +1,13 @@
+{
+  "plan": [
+    "run.services.get"
+  ],
+  "apply": [
+    "iam.serviceAccounts.actAs",
+    "run.services.create",
+    "run.services.delete",
+    "run.services.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

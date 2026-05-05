@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "bigquery.datasets.get"
+  ],
+  "apply": [
+    "bigquery.datasets.create",
+    "bigquery.datasets.delete",
+    "bigquery.datasets.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

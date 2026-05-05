@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.subnetworks.get"
+  ],
+  "apply": [
+    "compute.subnetworks.create",
+    "compute.subnetworks.delete",
+    "compute.subnetworks.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

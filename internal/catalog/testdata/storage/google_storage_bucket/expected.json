@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "storage.buckets.get"
+  ],
+  "apply": [
+    "storage.buckets.create",
+    "storage.buckets.delete",
+    "storage.buckets.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "pubsub.subscriptions.get"
+  ],
+  "apply": [
+    "pubsub.subscriptions.create",
+    "pubsub.subscriptions.delete",
+    "pubsub.subscriptions.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

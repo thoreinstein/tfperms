@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.networks.get"
+  ],
+  "apply": [
+    "compute.networks.create",
+    "compute.networks.delete",
+    "compute.networks.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

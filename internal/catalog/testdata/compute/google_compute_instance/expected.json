@@ -1,0 +1,18 @@
+{
+  "plan": [
+    "compute.instances.get"
+  ],
+  "apply": [
+    "compute.disks.create",
+    "compute.disks.delete",
+    "compute.instances.create",
+    "compute.instances.delete",
+    "compute.instances.setMetadata",
+    "compute.instances.setTags",
+    "compute.instances.update",
+    "compute.subnetworks.use",
+    "iam.serviceAccounts.actAs"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "cloudsql.instances.get"
+  ],
+  "apply": [
+    "cloudsql.instances.create",
+    "cloudsql.instances.delete",
+    "cloudsql.instances.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
