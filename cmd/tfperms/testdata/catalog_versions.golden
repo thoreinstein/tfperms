@@ -1,0 +1,12 @@
+tfperms catalog versions
+
+tested_against_provider census:
+  count  tested_against_provider
+  41     >=6.0.0,<7.0.0
+  6      >=5.0.0,<7.0.0
+  2      >=4.0.0,<5.0.0
+  2      >=4.5.0,<5.0.0
+
+Note: groups are matched by literal string. Whitespace differences
+between otherwise-equivalent clauses appear as distinct rows. Use
+`tfperms catalog stats` for semantic drift detection.

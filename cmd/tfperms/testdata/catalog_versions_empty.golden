@@ -1,0 +1,8 @@
+tfperms catalog versions
+
+tested_against_provider census:
+  (none)
+
+Note: groups are matched by literal string. Whitespace differences
+between otherwise-equivalent clauses appear as distinct rows. Use
+`tfperms catalog stats` for semantic drift detection.

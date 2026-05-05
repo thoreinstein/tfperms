@@ -33,12 +33,125 @@ func newCatalogCmd() *cobra.Command {
 		Short: "Manage and inspect the tfperms permission catalog",
 		Long: "catalog provides subcommands for working with the YAML-backed " +
 			"permission catalog under catalog/. Use `catalog scaffold` to " +
-			"emit a stub for a new entry, or `catalog stats` to inspect " +
-			"catalog health (verification age, missing provenance, drift).",
+			"emit a stub for a new entry, `catalog stats` to inspect " +
+			"catalog health (verification age, missing provenance, drift), " +
+			"or `catalog versions` to count entries grouped by their " +
+			"literal tested_against_provider clause.",
 	}
 	cmd.AddCommand(newCatalogScaffoldCmd())
 	cmd.AddCommand(newCatalogStatsCmd())
+	cmd.AddCommand(newCatalogVersionsCmd())
 	return cmd
+}
+
+// newCatalogVersionsCmd returns `tfperms catalog versions`.
+//
+// The command loads the embedded catalog through catalog.Load() (the
+// same strict-validation entry point used at production startup),
+// computes the per-constraint census via catalog.AggregateVersions, and
+// renders the result to stdout in a deterministic, golden-file-friendly
+// layout. There are no flags today — the report shape is fixed by the
+// underlying VersionGroup type, and a future --json variant belongs on
+// this command rather than as a new top-level subcommand.
+//
+// Errors from catalog.Load() (a malformed YAML, a schema violation)
+// are surfaced verbatim, matching the diagnostic vocabulary of
+// `catalog stats` so contributors see one consistent shape across the
+// catalog command tree.
+func newCatalogVersionsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "versions",
+		Short: "Print a census of tested_against_provider clauses",
+		Long: "Group catalog entries (resources, data sources, IAM bindings) " +
+			"by their literal tested_against_provider clause and print the " +
+			"counts. Grouping is by exact string match — semantically " +
+			"equivalent clauses with different whitespace appear as " +
+			"separate groups so formatting drift stays visible. Use " +
+			"`catalog stats` for semantic drift detection against a " +
+			"reference provider version.",
+		Args: cobra.NoArgs,
+		// SilenceUsage matches catalog stats / scaffold: once we are
+		// past argument parsing, the trailing usage block is irrelevant
+		// and suppressing it keeps the user's eye on the actual error.
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat, err := catalog.Load()
+			if err != nil {
+				return err
+			}
+			groups := catalog.AggregateVersions(cat)
+			return renderCatalogVersions(cmd.OutOrStdout(), groups)
+		},
+	}
+	return cmd
+}
+
+// renderCatalogVersions writes a deterministic, single-section report
+// derived from groups to w. The format is fixed (no flags adjust it)
+// so a golden-file test can pin it: deviations from the layout below —
+// header text, column ordering, padding rules, footer text — are
+// user-visible changes and require updating the golden fixture in the
+// same diff.
+//
+// Layout:
+//
+//	tfperms catalog versions
+//
+//	tested_against_provider census:
+//	  count  tested_against_provider
+//	  N      <constraint>
+//	  ...
+//
+//	Note: groups are matched by literal string. Whitespace differences
+//	between otherwise-equivalent clauses appear as distinct rows. Use
+//	`tfperms catalog stats` for semantic drift detection.
+//
+// An empty census (no entries) prints "(none)" under the header so a
+// reader skimming the output cannot mistake "no constraints declared"
+// for "the section was omitted by accident". The trailing footer is
+// always printed — it is contributor-facing context, not a data row,
+// and its presence anchors the format for the golden test.
+//
+// All writes go through an errWriter that latches the first underlying
+// io.Writer error (the same helper renderCatalogStats uses). The
+// per-section tabwriter flush wraps its failure with a section-
+// specific %w so the cobra "Error: ..." line identifies where the pipe
+// broke; the trailing errWriter check catches errors that only surface
+// in plain Fprintln calls (the empty-census branch and the footer).
+func renderCatalogVersions(w io.Writer, groups []catalog.VersionGroup) error {
+	ew := &errWriter{w: w}
+
+	fmt.Fprintln(ew, "tfperms catalog versions")
+	fmt.Fprintln(ew)
+
+	fmt.Fprintln(ew, "tested_against_provider census:")
+	if len(groups) == 0 {
+		fmt.Fprintln(ew, "  (none)")
+	} else {
+		tw := tabwriter.NewWriter(ew, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  count\ttested_against_provider")
+		for _, g := range groups {
+			fmt.Fprintf(tw, "  %d\t%s\n", g.Count, g.TestedAgainstProvider)
+		}
+		if err := tw.Flush(); err != nil {
+			return fmt.Errorf("flush versions: %w", err)
+		}
+	}
+	fmt.Fprintln(ew)
+
+	// Footer is part of the format contract — golden test pins it.
+	// Phrased as a "Note:" so it reads as auxiliary guidance rather
+	// than a data row, and references `catalog stats` so a contributor
+	// surprised by a duplicate-with-whitespace row knows where to go
+	// for semantic analysis.
+	fmt.Fprintln(ew, "Note: groups are matched by literal string. Whitespace differences")
+	fmt.Fprintln(ew, "between otherwise-equivalent clauses appear as distinct rows. Use")
+	fmt.Fprintln(ew, "`tfperms catalog stats` for semantic drift detection.")
+
+	if ew.err != nil {
+		return fmt.Errorf("write catalog versions: %w", ew.err)
+	}
+	return nil
 }
 
 // newCatalogStatsCmd returns `tfperms catalog stats`.
