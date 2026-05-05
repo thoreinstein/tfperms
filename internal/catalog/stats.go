@@ -154,6 +154,13 @@ type DriftEntry struct {
 // deterministic and lets a future caller compute stats off a catalog
 // loaded from somewhere other than the embedded FS without surprises.
 func ComputeStats(cat *Catalog, referenceVersion string) CatalogStats {
+	// Normalise once at the entrance so the empty-string check below
+	// and CatalogStats.ReferenceVersion (consumed by the renderer's
+	// "Drift from provider X" header) agree on what "no reference" means.
+	// A whitespace-only value would otherwise enable drift detection here
+	// while producing a cosmetic header like "Drift from provider   :"
+	// downstream.
+	referenceVersion = strings.TrimSpace(referenceVersion)
 	stats := CatalogStats{
 		Services:          []ServiceStats{},
 		OldestVerified:    []AgingEntry{},
