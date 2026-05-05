@@ -1,10 +1,12 @@
 {
   "plan": [
-    "storage.buckets.get"
+    "storage.buckets.get",
+    "storage.buckets.getIamPolicy"
   ],
   "apply": [
     "storage.buckets.create",
     "storage.buckets.delete",
+    "storage.buckets.setIamPolicy",
     "storage.buckets.update"
   ],
   "unknowns": [],
