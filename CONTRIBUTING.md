@@ -5,6 +5,10 @@ permission catalog at `catalog/*.yaml`. Code-level contributions follow
 the conventions visible in `internal/parser/` and the existing tests;
 the catalog has its own conventions and they are documented here.
 
+If you are short on time, jump to the [pull request checklist](#pull-request-checklist)
+at the bottom — it is the canonical list of gates a catalog PR must
+pass. The sections above explain why each gate exists.
+
 ## What the catalog is
 
 `catalog/*.yaml` is the source of truth that maps Terraform resource
@@ -24,21 +28,39 @@ need to read the Go code to add a catalog entry — the YAML is enough.
    so a `*.yml` file would work locally via the disk loader but
    silently vanish from the production binary; the loader rejects the
    extension up front to keep the two in lockstep.
-2. Copy the structure from `catalog/storage.yaml`. It is intentionally
-   the canonical example; every schema feature is exercised at least
-   once.
-3. Run the validator: `go test ./internal/catalog/...`. The tests
-   include a repository consistency check that loads every
-   `catalog/*.yaml` file and validates it. A new file with a missing
-   field, an unknown verification method, or a dangling
-   `parent_resource` will fail there with a `<file>:<line>` pointer
-   to the offending node.
+2. Generate a stub with `tfperms catalog scaffold <terraform_type>`.
+   The command derives the service-level filename from the resource
+   type's `google_<service>_*` prefix, creates the file if it does
+   not exist, and writes a YAML entry with every required schema
+   field pre-populated with `TODO` sentinels. Use `--data-source` for
+   `data_sources:` entries and `--iam-binding` for IAM resources;
+   without a flag the stub lands under `resources:`. The TODO
+   sentinels are deliberate — they parse as valid YAML so the file
+   loads, but the validator rejects them so the contributor cannot
+   accidentally land an unverified entry.
+3. Copy structural details from `catalog/storage.yaml` when in doubt.
+   It is intentionally the canonical example; every schema feature is
+   exercised at least once (resources, data_sources, iam_bindings,
+   conditionals).
+4. Run `make catalog-validate`. This wraps the schema and repository
+   consistency tests; a new file with a missing field, an unknown
+   verification method, a dangling `parent_resource`, or a TODO
+   sentinel left in place will fail there with a `<file>:<line>`
+   pointer to the offending node.
 
 ## Catalog verification procedure
 
-Every catalog entry MUST carry provenance. Updates without provenance
-are rejected by the validator and by review. The two accepted
-verification methods are:
+Every catalog entry MUST carry provenance. The `verification` block
+records four required fields — `method`, `source_urls`, `verified_at`,
+and `verified_provider_version` — and updates without them are
+rejected by the validator and by review. `verified_at` is a
+`YYYY-MM-DD` date that must fall on or after **2024-01-01** (the
+catalog's project floor; see `provenanceFloorDate` in
+`internal/catalog/repo_test.go`) and within seven days of the
+contributor's wall clock. Obvious stub dates (`0001-01-01`,
+`1970-01-01`, `2099-01-01`, ...) are rejected explicitly.
+
+The two accepted verification methods are:
 
 - **`empirical`** — you ran `terraform apply` against a service
   account whose role you tightened until each missing-permission error
@@ -126,12 +148,100 @@ For each entry you add or modify:
    defensible range — the diagnostics command surfaces the raw range
    so users can compare it against their lockfile.
 
-A worked example (the same one in `catalog/storage.yaml`) verifies
-`google_storage_bucket` by walking through `Buckets.Get` (plan),
-`Buckets.Insert` (create), `Buckets.Patch` (update),
-`Buckets.Delete` (delete), and a conditional that adds
-`Buckets.{getIamPolicy, setIamPolicy}` only when
-`uniform_bucket_level_access` is set.
+For a complete reference of an entry that exercises every schema
+feature — including a `conditionals` block — see
+`google_storage_bucket` in `catalog/storage.yaml`. The walkthrough
+below shows the end-to-end docs+source workflow for a fresh service
+that does not exist in the catalog yet.
+
+### Worked example: `google_dataplex_lake`
+
+This walkthrough adds Dataplex coverage from scratch using the
+`docs+source` method. It illustrates the scaffold → map → validate
+loop; the actual permission strings below are placeholders the
+contributor verifies against the live docs and provider source on
+their own machine.
+
+**1. Scaffold the stub.** From the repository root:
+
+```sh
+tfperms catalog scaffold google_dataplex_lake
+# wrote stub for google_dataplex_lake to catalog/dataplex.yaml
+```
+
+The command infers `dataplex.yaml` from the `google_dataplex_*`
+prefix, creates the file (the service had no prior catalog
+coverage), and writes one `resources:` entry with every required
+schema field set to a `TODO` sentinel. The file parses but
+deliberately fails `make catalog-validate` until the contributor
+fills the values in.
+
+**2. Map permissions from the provider source.** Open the
+[terraform-provider-google][1] file
+`google/services/dataplex/resource_dataplex_lake.go` and enumerate
+the distinct API calls:
+
+| Lifecycle stage | Provider call (illustrative) | Required permission |
+|----------------|------------------------------|---------------------|
+| `plan`         | `Lakes.Get`                  | `dataplex.lakes.get` |
+| `create`       | `Lakes.Create`               | `dataplex.lakes.create` |
+| `update`       | `Lakes.Patch`                | `dataplex.lakes.update` |
+| `delete`       | `Lakes.Delete`               | `dataplex.lakes.delete` |
+
+Cross-reference each permission against the
+[GCP Dataplex IAM permissions reference][3] to confirm the exact
+string. Verify, do not guess — provider-side method names do not
+always match the IAM permission verb (e.g. `Buckets.Insert` →
+`storage.buckets.create`).
+
+[3]: https://cloud.google.com/dataplex/docs/iam-permissions
+
+**3. Fill in the entry.** Replace the TODO sentinels in
+`catalog/dataplex.yaml` with the real values. The result looks like:
+
+```yaml
+resources:
+  google_dataplex_lake:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/dataplex/docs/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/dataplex/resource_dataplex_lake.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan:
+        - dataplex.lakes.get
+      create:
+        - dataplex.lakes.create
+      update:
+        - dataplex.lakes.update
+      delete:
+        - dataplex.lakes.delete
+```
+
+**4. Lock the mapping in the test.** Open
+`internal/catalog/repo_test.go` and add expected `plan` / `create` /
+`update` / `delete` lists for `google_dataplex_lake` to the
+`TestRepositoryCatalogPermissionsAreLocked` table. Editing a
+permission mapping is a deliberate change; the lock test is what
+makes a future regression visible in code review.
+
+**5. Validate.** Run:
+
+```sh
+make catalog-validate
+```
+
+The tests load every `catalog/*.yaml` file, check schema and
+provenance, and verify the locked permissions match the YAML. A
+clean exit means the entry is safe to PR.
+
+If you later promote `google_dataplex_lake` into the empirical tier,
+re-verify against a real GCP project, change `verification.method`
+to `empirical`, refresh `verified_at`, and add the type to the
+`topTierEmpiricalResources` map per the procedure above.
 
 ## Schema reference
 
@@ -255,15 +365,26 @@ few lines.
 ## Local feedback loop
 
 ```sh
+make catalog-validate
+```
+
+This is the canonical local check for catalog changes. It wraps the
+two test families that gate catalog correctness
+(`TestCatalogValid*` and `TestRepositoryCatalog*`) and is the same
+check CI runs. The full test suite is also fast (under a second):
+
+```sh
 go test ./internal/catalog/...
 ```
 
-The test suite is fast (under a second) and includes:
+Together they cover:
 
 - Schema unit tests for every individual rule (`TestValidate`).
 - Loader merge / duplicate-detection / malformed-input coverage.
 - A repository consistency test that loads the actual
   `catalog/*.yaml` and asserts every entry is valid.
+- A provenance-completeness test that rejects stub `verified_at`
+  values, off-floor dates, and missing source URLs.
 - Per-resource permission-mapping tests
   (`TestRepositoryCatalogPermissionsAreLocked`) that lock the exact
   `plan` / `create` / `update` / `delete` lists for each catalog
@@ -273,3 +394,33 @@ The test suite is fast (under a second) and includes:
   change in the same diff.
 
 Run it before opening a PR. If it passes locally it will pass in CI.
+
+## Pull request checklist
+
+Every catalog PR — whether it adds a single resource or a whole
+service file — must satisfy this checklist before review:
+
+- [ ] **`make catalog-validate` is clean** locally on the PR branch.
+      No skipped tests, no `-run` filters that hide other failures.
+- [ ] **Permissions are alphabetised** within each `plan` / `create` /
+      `update` / `delete` list, and entries are ordered consistently
+      within each section (alphabetical by Terraform type).
+- [ ] **Provenance is complete and real.** Every entry carries
+      `verification.method`, `source_urls`, `verified_at`, and
+      `verified_provider_version`. `verified_at` is the date the
+      verification ran (not the date you opened the PR), is on or
+      after 2024-01-01, and points to authentic
+      `cloud.google.com` or `github.com/hashicorp/terraform-provider-google`
+      URLs.
+- [ ] **Locked-permissions tests are updated** in
+      `internal/catalog/repo_test.go` so any change to a
+      `plan`/`create`/`update`/`delete` list is visible in the diff
+      next to the YAML change.
+- [ ] **Tier metadata is consistent.** If
+      `verification.method` is `empirical`, the Terraform type also
+      appears in `topTierEmpiricalResources` with a one-line
+      rationale; if it is `docs+source`, it does not.
+- [ ] **No stray TODO sentinels** from `tfperms catalog scaffold`
+      remain in the YAML (the validator catches these, but call it
+      out in the PR description if you intentionally split the work
+      across multiple PRs).
