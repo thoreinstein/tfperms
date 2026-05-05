@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -87,7 +88,9 @@ func TestCatalogStatsGolden(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	renderCatalogStats(&buf, stats)
+	if err := renderCatalogStats(&buf, stats); err != nil {
+		t.Fatalf("renderCatalogStats: %v", err)
+	}
 	got := buf.Bytes()
 
 	goldenPath := filepath.Join("testdata", "catalog_stats.golden")
@@ -142,5 +145,69 @@ func TestCatalogStatsCommandLoadsEmbeddedCatalog(t *testing.T) {
 		if !strings.Contains(output, h) {
 			t.Errorf("output missing %q header.\noutput:\n%s", h, output)
 		}
+	}
+}
+
+// failingWriter accepts the first byteBudget bytes and then returns
+// errBrokenPipe on every subsequent Write. It models a stdout pipe
+// that the consumer closes mid-render: the renderer must surface that
+// error rather than swallow it and exit zero with truncated output.
+type failingWriter struct {
+	byteBudget int
+	written    int
+}
+
+var errBrokenPipe = errors.New("simulated broken pipe")
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	if f.written >= f.byteBudget {
+		return 0, errBrokenPipe
+	}
+	remaining := f.byteBudget - f.written
+	if len(p) <= remaining {
+		f.written += len(p)
+		return len(p), nil
+	}
+	f.written = f.byteBudget
+	return remaining, errBrokenPipe
+}
+
+// TestCatalogStatsRendererPropagatesFlushErrors guards against
+// regression of the error-suppression bug that the previous review
+// flagged: `_ = tw.Flush()` would let a broken-pipe / short-write
+// stdout produce truncated output under exit code 0. With error
+// propagation in place, a failing writer must cause renderCatalogStats
+// to return a non-nil error.
+//
+// The fixture is sized large enough to require multiple section
+// flushes; the writer is configured with a small byte budget so the
+// first or second tabwriter.Flush hits the simulated broken pipe.
+func TestCatalogStatsRendererPropagatesFlushErrors(t *testing.T) {
+	stats := catalog.CatalogStats{
+		TotalResources:   2,
+		TotalDataSources: 1,
+		TotalIAMBindings: 1,
+		ReferenceVersion: "6.15.0",
+		Services: []catalog.ServiceStats{
+			{Service: "compute", Total: 2, Empirical: 1, DocsSource: 1},
+		},
+		OldestVerified: []catalog.AgingEntry{
+			{
+				Section:    "resources",
+				Type:       "google_compute_instance",
+				VerifiedAt: "2024-06-01",
+				Position:   catalog.Position{File: "compute.yaml", Line: 12},
+			},
+		},
+	}
+
+	w := &failingWriter{byteBudget: 16}
+	err := renderCatalogStats(w, stats)
+	if err == nil {
+		t.Fatal("renderCatalogStats with a failing writer returned nil; " +
+			"expected the broken-pipe error to be propagated to the caller")
+	}
+	if !errors.Is(err, errBrokenPipe) {
+		t.Errorf("renderCatalogStats error chain does not wrap the underlying writer error.\nerr: %v", err)
 	}
 }
