@@ -241,6 +241,36 @@ func TestRepositoryCatalogPermissionsAreLocked(t *testing.T) {
 			update: []string{"storage.objects.update"},
 			delete: []string{"storage.objects.delete"},
 		},
+		"google_compute_instance": {
+			plan: []string{"compute.instances.get"},
+			create: []string{
+				"compute.disks.create",
+				"compute.instances.create",
+				"compute.subnetworks.use",
+				"iam.serviceAccounts.actAs",
+			},
+			update: []string{
+				"compute.instances.setMetadata",
+				"compute.instances.setTags",
+				"compute.instances.update",
+			},
+			delete: []string{
+				"compute.disks.delete",
+				"compute.instances.delete",
+			},
+		},
+		"google_compute_network": {
+			plan:   []string{"compute.networks.get"},
+			create: []string{"compute.networks.create"},
+			update: []string{"compute.networks.update"},
+			delete: []string{"compute.networks.delete"},
+		},
+		"google_compute_subnetwork": {
+			plan:   []string{"compute.subnetworks.get"},
+			create: []string{"compute.subnetworks.create"},
+			update: []string{"compute.subnetworks.update"},
+			delete: []string{"compute.subnetworks.delete"},
+		},
 	}
 
 	expectedDataSources := map[string]expectedDataSource{
@@ -545,14 +575,18 @@ func TestRepositoryCatalogVerificationProvenanceComplete(t *testing.T) {
 //     eventually grow to cover; the actual membership is gated on a
 //     human running the verification in a real GCP project.
 //
-// The list is empty in this initial Epic 4 schema-and-loader branch
-// because no empirical verification has been performed yet. The
-// adjacent two tests (TopTierResourcesAreEmpirical /
-// EmpiricalEntriesAreOnTopTierList) enforce the contract regardless of
-// list size, so future PRs that do perform empirical verification can
-// add an entry here AND flip the YAML method to empirical with the
-// machine-checkable assurance that the two stay in lockstep.
-var topTierEmpiricalResources = map[string]string{}
+// The list grows as resources are empirically verified. Entries that
+// land here ship in the same diff as the YAML flip to method:
+// empirical so the bidirectional contract (TopTierResourcesAreEmpirical
+// / EmpiricalEntriesAreOnTopTierList) catches drift at CI time. The
+// PDR's named examples are tagged with "PDR Epic 4 top-15 example" to
+// make the rationale obvious in test failures.
+var topTierEmpiricalResources = map[string]string{
+	"google_storage_bucket":     "PDR Epic 4 top-15 example",
+	"google_compute_instance":   "PDR Epic 4 top-15 example",
+	"google_compute_network":    "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
+	"google_compute_subnetwork": "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
+}
 
 // TestRepositoryCatalogTopTierResourcesAreEmpirical enforces the Epic
 // 4 contract that every resource the project has designated as
