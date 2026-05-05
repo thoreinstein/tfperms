@@ -295,6 +295,21 @@ func TestRepositoryCatalogPermissionsAreLocked(t *testing.T) {
 			update: []string{"pubsub.subscriptions.update"},
 			delete: []string{"pubsub.subscriptions.delete"},
 		},
+		"google_cloud_run_service": {
+			plan: []string{"run.services.get"},
+			create: []string{
+				"iam.serviceAccounts.actAs",
+				"run.services.create",
+			},
+			update: []string{"run.services.update"},
+			delete: []string{"run.services.delete"},
+		},
+		"google_sql_database_instance": {
+			plan:   []string{"cloudsql.instances.get"},
+			create: []string{"cloudsql.instances.create"},
+			update: []string{"cloudsql.instances.update"},
+			delete: []string{"cloudsql.instances.delete"},
+		},
 	}
 
 	expectedDataSources := map[string]expectedDataSource{
@@ -606,14 +621,16 @@ func TestRepositoryCatalogVerificationProvenanceComplete(t *testing.T) {
 // PDR's named examples are tagged with "PDR Epic 4 top-15 example" to
 // make the rationale obvious in test failures.
 var topTierEmpiricalResources = map[string]string{
-	"google_storage_bucket":      "PDR Epic 4 top-15 example",
-	"google_compute_instance":    "PDR Epic 4 top-15 example",
-	"google_compute_network":     "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
-	"google_compute_subnetwork":  "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
-	"google_bigquery_dataset":    "PDR Epic 4 top-15 example",
-	"google_bigquery_table":      "PDR Epic 4 top-15 (paired with google_bigquery_dataset for analytics configs)",
-	"google_pubsub_topic":        "PDR Epic 4 top-15 example",
-	"google_pubsub_subscription": "PDR Epic 4 top-15 (paired with google_pubsub_topic for event-driven configs)",
+	"google_storage_bucket":        "PDR Epic 4 top-15 example",
+	"google_compute_instance":      "PDR Epic 4 top-15 example",
+	"google_compute_network":       "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
+	"google_compute_subnetwork":    "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
+	"google_bigquery_dataset":      "PDR Epic 4 top-15 example",
+	"google_bigquery_table":        "PDR Epic 4 top-15 (paired with google_bigquery_dataset for analytics configs)",
+	"google_pubsub_topic":          "PDR Epic 4 top-15 example",
+	"google_pubsub_subscription":   "PDR Epic 4 top-15 (paired with google_pubsub_topic for event-driven configs)",
+	"google_cloud_run_service":     "PDR Epic 4 top-15 example",
+	"google_sql_database_instance": "PDR Epic 4 top-15 example",
 }
 
 // TestRepositoryCatalogTopTierResourcesAreEmpirical enforces the Epic

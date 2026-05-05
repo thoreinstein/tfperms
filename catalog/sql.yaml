@@ -1,0 +1,35 @@
+# Cloud SQL permission catalog.
+#
+# google_sql_database_instance is the master Cloud SQL container —
+# database and user resources hang off it. Tier 1 covers the instance
+# itself; databases and users are tracked as long-tail entries for
+# later rollouts.
+#
+# Empirically verified by iteratively granting the listed permissions
+# until terraform plan / apply / destroy completed without IAM errors
+# against terraform-provider-google 6.20.0. The verification used a
+# minimal db-f1-micro / db-custom-1-3840 MySQL instance in a clean
+# project; larger configurations (HA, read replicas, customer-managed
+# encryption) may require additional permissions which can be layered
+# in as conditional entries when those features are exercised by the
+# catalog's analyzer surface.
+
+resources:
+  google_sql_database_instance:
+    verification:
+      method: empirical
+      source_urls:
+        - https://cloud.google.com/sql/docs/mysql/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/sql/resource_sql_database_instance.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - cloudsql.instances.get
+      create:
+        - cloudsql.instances.create
+      update:
+        - cloudsql.instances.update
+      delete:
+        - cloudsql.instances.delete
