@@ -1,0 +1,50 @@
+# BigQuery permission catalog.
+#
+# Top-tier per Epic 4: dataset and table cover the bulk of analytics
+# Terraform configurations, and a wrong mapping here lands users in
+# the "permission denied" error that motivates tfperms in the first
+# place.
+#
+# Both entries are empirically verified — a least-privilege service
+# account was iteratively granted the listed permissions until
+# terraform plan / apply / destroy completed without IAM errors
+# against terraform-provider-google 6.20.0.
+
+resources:
+  google_bigquery_dataset:
+    verification:
+      method: empirical
+      source_urls:
+        - https://cloud.google.com/bigquery/docs/access-control
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/bigquery/resource_bigquery_dataset.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - bigquery.datasets.get
+      create:
+        - bigquery.datasets.create
+      update:
+        - bigquery.datasets.update
+      delete:
+        - bigquery.datasets.delete
+
+  google_bigquery_table:
+    verification:
+      method: empirical
+      source_urls:
+        - https://cloud.google.com/bigquery/docs/access-control
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/bigquery/resource_bigquery_table.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - bigquery.tables.get
+      create:
+        - bigquery.tables.create
+      update:
+        - bigquery.tables.update
+      delete:
+        - bigquery.tables.delete
