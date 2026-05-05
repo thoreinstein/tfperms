@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "artifactregistry.repositories.get"
+  ],
+  "apply": [
+    "artifactregistry.repositories.create",
+    "artifactregistry.repositories.delete",
+    "artifactregistry.repositories.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

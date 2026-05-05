@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "resourcemanager.projects.get"
+  ],
+  "apply": [
+    "resourcemanager.projects.create",
+    "resourcemanager.projects.delete",
+    "resourcemanager.projects.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "resourcemanager.projects.getIamPolicy"
+  ],
+  "apply": [
+    "resourcemanager.projects.setIamPolicy"
+  ],
+  "unknowns": [
+    "google_iam_policy"
+  ],
+  "unresolved": []
+}

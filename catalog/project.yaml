@@ -1,0 +1,98 @@
+# Project + project-level IAM permission catalog.
+#
+# google_project is included as a `resources:` entry primarily so the
+# project-IAM binding flavours below have a parent_resource to point
+# at — the validator rejects iam_bindings whose parent is not declared
+# anywhere. The permissions on google_project itself reflect the
+# minimal lifecycle the provider drives against the Cloud Resource
+# Manager API; project creation in real-world Terraform usually also
+# touches billing.* and serviceusage.* surfaces, which are not
+# included here because they are enabled by separate Terraform
+# resources (google_project_service, google_billing_account_iam_*).
+#
+# All three IAM-binding flavours (binding, member, policy) on a
+# project use the same plan / write split. They are listed as
+# independent entries to keep the lock granular: per-flavour
+# expectations make any future divergence visible per-entry rather
+# than disguised by reuse.
+
+resources:
+  google_project:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/resource-manager/docs/access-control-proj
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/resourcemanager/resource_google_project.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - resourcemanager.projects.get
+      create:
+        - resourcemanager.projects.create
+      update:
+        - resourcemanager.projects.update
+      delete:
+        - resourcemanager.projects.delete
+
+iam_bindings:
+  google_project_iam_binding:
+    parent_resource: google_project
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/iam/docs/permissions-reference
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/resourcemanager/resource_google_project_iam.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - resourcemanager.projects.getIamPolicy
+      create:
+        - resourcemanager.projects.setIamPolicy
+      update:
+        - resourcemanager.projects.setIamPolicy
+      delete:
+        - resourcemanager.projects.setIamPolicy
+
+  google_project_iam_member:
+    parent_resource: google_project
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/iam/docs/permissions-reference
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/resourcemanager/resource_google_project_iam.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - resourcemanager.projects.getIamPolicy
+      create:
+        - resourcemanager.projects.setIamPolicy
+      update:
+        - resourcemanager.projects.setIamPolicy
+      delete:
+        - resourcemanager.projects.setIamPolicy
+
+  google_project_iam_policy:
+    parent_resource: google_project
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/iam/docs/permissions-reference
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/resourcemanager/resource_google_project_iam.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - resourcemanager.projects.getIamPolicy
+      create:
+        - resourcemanager.projects.setIamPolicy
+      update:
+        - resourcemanager.projects.setIamPolicy
+      delete:
+        - resourcemanager.projects.setIamPolicy

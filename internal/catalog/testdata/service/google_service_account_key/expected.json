@@ -1,0 +1,11 @@
+{
+  "plan": [
+    "iam.serviceAccountKeys.get"
+  ],
+  "apply": [
+    "iam.serviceAccountKeys.create",
+    "iam.serviceAccountKeys.delete"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
