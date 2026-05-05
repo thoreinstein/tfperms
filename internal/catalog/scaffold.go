@@ -12,7 +12,7 @@ package catalog
 //     cobra layer. It composes the helpers and the file-management logic
 //     into one call.
 //   - GenerateStub: produces a YAML fragment with TODO sentinels for the
-//     given resource type and section. Goes through yaml.Marshal so the
+//     given resource type and section. Goes through yaml.NewEncoder so the
 //     output is guaranteed syntactically valid even if the schema gains
 //     new required fields later — a field-by-field string template would
 //     drift.
