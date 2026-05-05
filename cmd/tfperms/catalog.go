@@ -131,7 +131,19 @@ func renderCatalogVersions(w io.Writer, groups []catalog.VersionGroup) error {
 		tw := tabwriter.NewWriter(ew, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "  count\ttested_against_provider")
 		for _, g := range groups {
-			fmt.Fprintf(tw, "  %d\t%s\n", g.Count, g.TestedAgainstProvider)
+			// AggregateVersions preserves empty
+			// `tested_against_provider` values for in-memory callers
+			// (a hand-rolled catalog mid-edit, a downstream JSON
+			// consumer) rather than dropping them. A blank table cell
+			// would make such a row effectively invisible and
+			// indistinguishable from formatting damage, so substitute
+			// an explicit placeholder to keep the contract visible at
+			// the CLI surface.
+			constraint := g.TestedAgainstProvider
+			if constraint == "" {
+				constraint = "(empty)"
+			}
+			fmt.Fprintf(tw, "  %d\t%s\n", g.Count, constraint)
 		}
 		if err := tw.Flush(); err != nil {
 			return fmt.Errorf("flush versions: %w", err)
