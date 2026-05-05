@@ -1,15 +1,15 @@
 # Pub/Sub permission catalog.
 #
-# Top-tier per Epic 4: pubsub topic + subscription are the canonical
-# event-driven backbone for GCP and the most-used messaging primitives.
-# Empirically verified by iteratively granting the listed permissions
-# until terraform plan / apply / destroy completed without IAM errors
-# against terraform-provider-google 6.20.0.
+# pubsub topic + subscription are the canonical event-driven backbone
+# for GCP and the most-used messaging primitives. Both entries use the
+# docs+source verification procedure (CONTRIBUTING.md): the provider
+# source was cross-referenced with the GCP IAM permission reference to
+# map each Terraform lifecycle stage to one IAM permission.
 
 resources:
   google_pubsub_topic:
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/pubsub/docs/access-control
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/pubsub/resource_pubsub_topic.go
@@ -28,7 +28,7 @@ resources:
 
   google_pubsub_subscription:
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/pubsub/docs/access-control
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/pubsub/resource_pubsub_subscription.go

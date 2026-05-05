@@ -1,22 +1,20 @@
 # Cloud Run permission catalog.
 #
 # google_cloud_run_service is the Cloud Run v1 (Knative-shaped)
-# resource. The Cloud Run v2 surface (google_cloud_run_v2_service)
-# is intentionally not part of Phase 3 — it is tracked as a future
-# top-tier candidate; v1 still ships in the largest share of
+# resource. The Cloud Run v2 surface (google_cloud_run_v2_service) is
+# tracked as a future entry; v1 still ships in the largest share of
 # real-world configurations.
 #
-# Empirically verified by iteratively granting the listed permissions
-# until terraform plan / apply / destroy completed without IAM errors
-# against terraform-provider-google 6.20.0. iam.serviceAccounts.actAs
-# is required at create-time because the deployed revision runs as
-# the service's runtime service account, which the deploying SA must
-# be allowed to actAs.
+# Verified via the docs+source procedure (CONTRIBUTING.md). The
+# non-obvious permission is iam.serviceAccounts.actAs at create-time:
+# the deployed revision runs as the service's runtime service account
+# (the default Compute Engine SA when none is set explicitly), which
+# the deploying SA must be allowed to actAs.
 
 resources:
   google_cloud_run_service:
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/run/docs/reference/iam/permissions
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/cloudrun/resource_cloud_run_service.go
@@ -27,9 +25,6 @@ resources:
       plan:
         - run.services.get
       create:
-        # The deploying SA must be allowed to actAs the runtime SA the
-        # revision runs as (default Compute Engine SA when none is set
-        # explicitly).
         - iam.serviceAccounts.actAs
         - run.services.create
       update:

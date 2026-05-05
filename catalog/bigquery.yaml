@@ -1,19 +1,15 @@
 # BigQuery permission catalog.
 #
-# Top-tier per Epic 4: dataset and table cover the bulk of analytics
-# Terraform configurations, and a wrong mapping here lands users in
-# the "permission denied" error that motivates tfperms in the first
-# place.
-#
-# Both entries are empirically verified — a least-privilege service
-# account was iteratively granted the listed permissions until
-# terraform plan / apply / destroy completed without IAM errors
-# against terraform-provider-google 6.20.0.
+# Dataset and table cover the bulk of analytics Terraform
+# configurations. Both entries use the docs+source verification
+# procedure (CONTRIBUTING.md): API calls in the provider source were
+# cross-referenced with the GCP IAM permission reference and mapped to
+# one permission per Terraform lifecycle stage.
 
 resources:
   google_bigquery_dataset:
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/bigquery/docs/access-control
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/bigquery/resource_bigquery_dataset.go
@@ -32,7 +28,7 @@ resources:
 
   google_bigquery_table:
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/bigquery/docs/access-control
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/bigquery/resource_bigquery_table.go

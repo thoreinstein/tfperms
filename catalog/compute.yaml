@@ -2,11 +2,10 @@
 #
 # Covers the core VPC + VM trio that nearly every GCP Terraform
 # configuration touches: instances, networks, and subnetworks. Each
-# entry is empirically verified per the Epic 4 top-tier procedure
-# (CONTRIBUTING.md): a least-privilege service account was iteratively
-# granted the listed permissions until terraform plan / apply / destroy
-# completed without IAM errors against terraform-provider-google
-# 6.20.0.
+# entry is verified via the docs+source procedure (CONTRIBUTING.md):
+# the API calls in the provider source were cross-referenced with the
+# GCP IAM permission reference, and one IAM permission was recorded
+# per Terraform lifecycle stage.
 #
 # Resource style follows storage.yaml: one resource per entry,
 # permissions sorted alphabetically per stage, comments above
@@ -14,15 +13,23 @@
 
 resources:
   google_compute_instance:
-    # Empirically verified by creating, updating (label / metadata
-    # change), and destroying a minimal VM (e2-micro, debian-12 boot
-    # disk, default-VPC subnetwork) in a clean GCP project. The
-    # service account additionally requires iam.serviceAccounts.actAs
-    # because the VM runs as the default Compute Engine SA;
-    # compute.subnetworks.use is required to attach the network
-    # interface.
+    # The non-obvious permissions here come from secondary API calls
+    # the provider issues during create:
+    #
+    #   - compute.disks.create — the boot disk in initialize_params is
+    #     created alongside the instance.
+    #   - compute.subnetworks.use — required to attach the network
+    #     interface to the chosen (or default) subnetwork.
+    #   - iam.serviceAccounts.actAs — the VM runs as a service account
+    #     (the default Compute Engine SA when none is specified), and
+    #     the deploying SA must be allowed to actAs it.
+    #
+    # In-place updates land on setMetadata / setTags / update depending
+    # on which attribute changed (machine_type / min_cpu_platform
+    # changes trigger a stop/start that the provider performs
+    # automatically, hitting the generic update endpoint).
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/compute/docs/access/iam
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_instance.go
@@ -33,23 +40,11 @@ resources:
       plan:
         - compute.instances.get
       create:
-        # Boot disk creation when initialize_params is set (the common
-        # case); the disk is created alongside the instance.
         - compute.disks.create
         - compute.instances.create
-        # Required to attach the network interface to the chosen
-        # subnetwork even when using the default network.
         - compute.subnetworks.use
-        # The default service_account block runs the VM as the default
-        # Compute Engine SA, which the deploying SA must be allowed to
-        # actAs.
         - iam.serviceAccounts.actAs
       update:
-        # In-place updates land on these endpoints depending on which
-        # attribute changed: setMetadata for metadata, setTags for
-        # network tags, and the generic update for machine_type /
-        # min_cpu_platform changes (which require a stop/start that
-        # the provider performs automatically).
         - compute.instances.setMetadata
         - compute.instances.setTags
         - compute.instances.update
@@ -59,7 +54,7 @@ resources:
 
   google_compute_network:
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/compute/docs/access/iam
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_network.go
@@ -78,7 +73,7 @@ resources:
 
   google_compute_subnetwork:
     verification:
-      method: empirical
+      method: docs+source
       source_urls:
         - https://cloud.google.com/compute/docs/access/iam
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_subnetwork.go

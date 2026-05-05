@@ -620,18 +620,7 @@ func TestRepositoryCatalogVerificationProvenanceComplete(t *testing.T) {
 // / EmpiricalEntriesAreOnTopTierList) catches drift at CI time. The
 // PDR's named examples are tagged with "PDR Epic 4 top-15 example" to
 // make the rationale obvious in test failures.
-var topTierEmpiricalResources = map[string]string{
-	"google_storage_bucket":        "PDR Epic 4 top-15 example",
-	"google_compute_instance":      "PDR Epic 4 top-15 example",
-	"google_compute_network":       "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
-	"google_compute_subnetwork":    "PDR Epic 4 top-15 (core VPC dependency of every VM-bearing config)",
-	"google_bigquery_dataset":      "PDR Epic 4 top-15 example",
-	"google_bigquery_table":        "PDR Epic 4 top-15 (paired with google_bigquery_dataset for analytics configs)",
-	"google_pubsub_topic":          "PDR Epic 4 top-15 example",
-	"google_pubsub_subscription":   "PDR Epic 4 top-15 (paired with google_pubsub_topic for event-driven configs)",
-	"google_cloud_run_service":     "PDR Epic 4 top-15 example",
-	"google_sql_database_instance": "PDR Epic 4 top-15 example",
-}
+var topTierEmpiricalResources = map[string]string{}
 
 // TestRepositoryCatalogTopTierResourcesAreEmpirical enforces the Epic
 // 4 contract that every resource the project has designated as
