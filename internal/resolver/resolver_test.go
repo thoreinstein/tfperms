@@ -344,6 +344,14 @@ func TestResolvePreventDestroy(t *testing.T) {
 // real conditional that exercises this today (storage's IAM conditional
 // has no Delete entry), but the contract is symmetric and we want a
 // regression test pinning it.
+//
+// The assertions match the shape used elsewhere in this file: full
+// expected plan / apply slices in lexicographic order. A
+// presence-only check on `storage.buckets.delete*` would miss a
+// regression where Resolve dropped Create or Update from the conditional
+// (still satisfying the negative assertion while breaking the contract);
+// the equality check pins both the suppression of Delete and the union
+// of every other permission stage.
 func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
 		When: map[string]any{"uniform_bucket_level_access": true},
@@ -362,14 +370,145 @@ func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 		},
 	}}, cat)
 
-	for _, p := range res.Apply {
-		if p == "storage.buckets.deleteIamPolicy" {
-			t.Errorf("apply unexpectedly contains conditional Delete %q under prevent_destroy=true; got apply=%v", p, res.Apply)
-		}
-		if p == "storage.buckets.delete" {
-			t.Errorf("apply unexpectedly contains base Delete %q under prevent_destroy=true; got apply=%v", p, res.Apply)
-		}
+	// The base PermissionSet has no Plan beyond storage.buckets.get,
+	// and the conditional contributes only Delete (which prevent_destroy
+	// suppresses). Plan therefore stays at the base entry.
+	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
+	// Apply: base Create + Update only. Both Delete sources —
+	// base storage.buckets.delete and the fired conditional's
+	// storage.buckets.deleteIamPolicy — must be suppressed.
+	assertSliceEqual(t, "apply", res.Apply, []string{
+		"storage.buckets.create",
+		"storage.buckets.update",
+	})
+	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+}
+
+// TestResolveUnresolvedKeyDistinguishesModulesAndKinds pins the dedup
+// key format for Resolution.Unresolved. The same `<type>.<name>` block
+// can appear multiple times in a resolution input — once at the root,
+// again inside a reused module, and once more as a `data` block — and
+// each instance must surface a distinct Unresolved entry when its
+// gating attribute is unresolved. Otherwise a single noisy module call
+// would silently mask its sibling and the reporter would under-report.
+//
+// This test seeds four resources sharing the type/name
+// `google_storage_bucket.primary` but differing in (Kind, ModulePath):
+//
+//	resource at root
+//	data     at root
+//	resource in module ["foo"]
+//	resource in module ["foo", "bar"]
+//
+// All four have an unresolved gating attribute, so all four must land
+// in Unresolved as separate entries, sorted lexicographically by the
+// unresolvedKey shape (module-path dotted in front, `data.` segment
+// for data blocks, then `<type>.<name>: <attribute>`).
+func TestResolveUnresolvedKeyDistinguishesModulesAndKinds(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources: map[string]*catalog.ResourceEntry{
+			"google_storage_bucket": {
+				Type: "google_storage_bucket",
+				Permissions: catalog.PermissionSet{
+					Plan: []string{"storage.buckets.get"},
+				},
+				Conditionals: []catalog.Conditional{{
+					When: map[string]any{"uniform_bucket_level_access": true},
+					Permissions: catalog.PermissionSet{
+						Plan: []string{"storage.buckets.getIamPolicy"},
+					},
+				}},
+			},
+		},
+		DataSources: map[string]*catalog.DataSourceEntry{
+			"google_storage_bucket": {
+				Type: "google_storage_bucket",
+				Permissions: catalog.DataSourcePermissions{
+					Plan: []string{"storage.buckets.get"},
+				},
+				Conditionals: []catalog.DataSourceConditional{{
+					When: map[string]any{"uniform_bucket_level_access": true},
+					Permissions: catalog.DataSourcePermissions{
+						Plan: []string{"storage.buckets.getIamPolicy"},
+					},
+				}},
+			},
+		},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{},
 	}
+
+	unresolvedAttrs := map[string]cty.Value{"uniform_bucket_level_access": cty.NilVal}
+
+	res := Resolve([]parser.Resource{
+		{Kind: "resource", Type: "google_storage_bucket", Name: "primary", Attrs: unresolvedAttrs},
+		{Kind: "data", Type: "google_storage_bucket", Name: "primary", Attrs: unresolvedAttrs},
+		{Kind: "resource", Type: "google_storage_bucket", Name: "primary", ModulePath: []string{"foo"}, Attrs: unresolvedAttrs},
+		{Kind: "resource", Type: "google_storage_bucket", Name: "primary", ModulePath: []string{"foo", "bar"}, Attrs: unresolvedAttrs},
+	}, cat)
+
+	// Sorted lexicographically: "data..." < "foo.bar..." < "foo..." <
+	// "google_..." — actually 'd' < 'f' < 'g', and within "foo*",
+	// "foo.bar.google_..." < "foo.google_...". Spell out the expected
+	// order so the test fails loudly if anyone shuffles unresolvedKey.
+	assertSliceEqual(t, "unresolved", res.Unresolved, []string{
+		"data.google_storage_bucket.primary: uniform_bucket_level_access",
+		"foo.bar.google_storage_bucket.primary: uniform_bucket_level_access",
+		"foo.google_storage_bucket.primary: uniform_bucket_level_access",
+		"google_storage_bucket.primary: uniform_bucket_level_access",
+	})
+}
+
+// TestResolveUnknownResourceType pins the Unknowns branch for `resource`
+// blocks: when a parsed resource's type is in neither Catalog.Resources
+// nor Catalog.IAMBindings, it surfaces in Resolution.Unknowns and
+// contributes nothing to plan / apply. Uses an empty catalog so the
+// unknown branch is the only path through Resolve.
+func TestResolveUnknownResourceType(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources:   map[string]*catalog.ResourceEntry{},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{},
+	}
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_unknown_resource",
+		Name: "x",
+	}}, cat)
+
+	assertSliceEqual(t, "plan", res.Plan, nil)
+	assertSliceEqual(t, "apply", res.Apply, nil)
+	assertSliceEqual(t, "unknowns", res.Unknowns, []string{"google_unknown_resource"})
+	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+}
+
+// TestResolveUnknownDataSourceType pins the Unknowns branch for `data`
+// blocks: a data block whose type is absent from Catalog.DataSources
+// surfaces in Resolution.Unknowns. The current key shape does not
+// distinguish unknown resources from unknown data sources (both store
+// r.Type), so a sibling `resource` block of the same unknown type
+// would collapse into the same entry — that is intentional under
+// today's Unknowns contract and beyond the scope of the unresolved-key
+// disambiguation. The test pins the type-only key so a future change
+// (e.g. mirroring unresolvedKey's `data.` prefix into Unknowns) is a
+// deliberate, test-flagged decision rather than a silent shift.
+func TestResolveUnknownDataSourceType(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources:   map[string]*catalog.ResourceEntry{},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{},
+	}
+
+	res := Resolve([]parser.Resource{{
+		Kind: "data",
+		Type: "google_unknown_data",
+		Name: "x",
+	}}, cat)
+
+	assertSliceEqual(t, "plan", res.Plan, nil)
+	assertSliceEqual(t, "apply", res.Apply, nil)
+	assertSliceEqual(t, "unknowns", res.Unknowns, []string{"google_unknown_data"})
+	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
 }
 
 // singleResourceCatalog returns a Catalog with one ResourceEntry for
