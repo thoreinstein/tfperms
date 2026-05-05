@@ -66,6 +66,26 @@ func TestCatalogScaffoldDuplicateNonZero(t *testing.T) {
 	}
 }
 
+// TestCatalogIntegrity is the cmd-level smoke check that the embedded
+// catalog still passes catalog.Load(). The internal-package
+// repo_test.go runs the same check, but exercising the load path from
+// main rather than internal/catalog catches the regression where a
+// future refactor moves the embed.FS or breaks the import graph at
+// the cmd boundary. Cheap to run, distinct in scope, and its failure
+// message is the one users see at runtime.
+func TestCatalogIntegrity(t *testing.T) {
+	cat, err := catalog.Load()
+	if err != nil {
+		t.Fatalf("catalog.Load() rejected the embedded catalog: %v", err)
+	}
+	if cat == nil {
+		t.Fatal("catalog.Load() returned nil with no error")
+	}
+	if len(cat.Resources)+len(cat.DataSources)+len(cat.IAMBindings) == 0 {
+		t.Fatal("embedded catalog is empty — loader or //go:embed pattern likely misconfigured")
+	}
+}
+
 // TestCatalogScaffoldMutuallyExclusiveFlags pins the input-validation
 // guard so a future refactor that reorders flag handling cannot make
 // --data-source and --iam-binding both apply at once (the section

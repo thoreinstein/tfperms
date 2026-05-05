@@ -1,0 +1,22 @@
+tfperms catalog stats
+
+Totals:
+  resources     3
+  data_sources  1
+  iam_bindings  1
+
+Coverage by service:
+  service  total  empirical  docs+source
+  compute  2      1          1
+  storage  3      0          3
+
+Oldest verifications (up to 5):
+  compute.yaml:12  resources/google_compute_instance               2024-06-01
+  storage.yaml:19  resources/google_storage_bucket                 2025-01-15
+  storage.yaml:94  iam_bindings/google_storage_bucket_iam_binding  2025-12-15
+
+Missing provenance (TODO sentinels):
+  storage.yaml:19  resources/google_storage_bucket  verification.source_urls[0]
+
+Drift from provider 6.15.0:
+  legacy.yaml:1  resources/google_legacy_resource  >=4.0.0,<5.0.0
