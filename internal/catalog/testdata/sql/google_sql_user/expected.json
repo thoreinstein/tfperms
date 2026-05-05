@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "cloudsql.users.list"
+  ],
+  "apply": [
+    "cloudsql.users.create",
+    "cloudsql.users.delete",
+    "cloudsql.users.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

@@ -44,3 +44,24 @@ resources:
         - pubsub.subscriptions.update
       delete:
         - pubsub.subscriptions.delete
+
+  # Pub/Sub schemas are immutable: any field change forces replacement
+  # rather than an in-place update, so the entry has no update
+  # permission to grant.
+  google_pubsub_schema:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/pubsub/docs/access-control
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/pubsub/resource_pubsub_schema.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - pubsub.schemas.get
+      create:
+        - pubsub.schemas.create
+      update: []
+      delete:
+        - pubsub.schemas.delete

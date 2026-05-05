@@ -1,0 +1,30 @@
+# Cloud Logging permission catalog.
+#
+# Verified via the docs+source procedure (CONTRIBUTING.md).
+#
+# A common gotcha around log sinks is that the destination
+# (BigQuery dataset, Storage bucket, Pub/Sub topic) usually requires a
+# separate IAM grant to the writer identity Cloud Logging materialises
+# behind the sink. That grant is the user's responsibility — typically
+# via a separate google_<destination>_iam_member resource — and is
+# tracked under the destination's own catalog entry, not here.
+
+resources:
+  google_logging_project_sink:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/logging/docs/access-control
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/logging/resource_logging_project_sink.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - logging.sinks.get
+      create:
+        - logging.sinks.create
+      update:
+        - logging.sinks.update
+      delete:
+        - logging.sinks.delete

@@ -2,7 +2,8 @@
 #
 # google_sql_database_instance is the master Cloud SQL container —
 # database and user resources hang off it. This file covers the
-# instance itself; databases and users are tracked as long-tail
+# instance plus the canonical database and user resources; replicas,
+# SSL certs, and source representations are tracked as long-tail
 # entries for later additions.
 #
 # Verified via the docs+source procedure (CONTRIBUTING.md). The
@@ -31,3 +32,48 @@ resources:
         - cloudsql.instances.update
       delete:
         - cloudsql.instances.delete
+
+  # Per-instance database — sits inside a google_sql_database_instance.
+  # The provider drives the cloudsql.databases.* surface for create /
+  # read / update / delete.
+  google_sql_database:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/sql/docs/mysql/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/sql/resource_sql_database.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - cloudsql.databases.get
+      create:
+        - cloudsql.databases.create
+      update:
+        - cloudsql.databases.update
+      delete:
+        - cloudsql.databases.delete
+
+  # Per-instance database user. The Cloud SQL IAM surface for users
+  # only exposes list / create / update / delete — there is no
+  # cloudsql.users.get — so the plan stage uses .list to refresh the
+  # user list against the parent instance.
+  google_sql_user:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/sql/docs/mysql/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/sql/resource_sql_user.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - cloudsql.users.list
+      create:
+        - cloudsql.users.create
+      update:
+        - cloudsql.users.update
+      delete:
+        - cloudsql.users.delete

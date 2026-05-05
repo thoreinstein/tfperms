@@ -68,6 +68,35 @@ resources:
       delete:
         - storage.objects.delete
 
+  # Bucket-level Pub/Sub notification. GCS notifications are immutable
+  # — any field change is delete + recreate — so the catalog has no
+  # update permission to grant.
+  #
+  # The notification's destination Pub/Sub topic must already grant
+  # `pubsub.topics.publish` to the GCS service account (the project's
+  # service-{PROJECT_NUMBER}@gs-project-accounts.iam.gserviceaccount.com).
+  # That grant is set up via a separate google_pubsub_topic_iam_member
+  # resource and so is not included in the notification's permission
+  # list — it would otherwise show up under every notification entry
+  # even when the operator already prepared the topic.
+  google_storage_notification:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/storage/docs/access-control/iam-permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/resource_storage_notification.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - storage.objects.list
+      create:
+        - storage.objects.list
+      update: []
+      delete:
+        - storage.objects.list
+
 data_sources:
   # Reading bucket metadata for downstream interpolation. No write
   # permissions because data sources are read-only at the GCP API

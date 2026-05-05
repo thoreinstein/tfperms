@@ -1,0 +1,14 @@
+{
+  "plan": [
+    "cloudfunctions.functions.get"
+  ],
+  "apply": [
+    "cloudfunctions.functions.create",
+    "cloudfunctions.functions.delete",
+    "cloudfunctions.functions.update",
+    "iam.serviceAccounts.actAs",
+    "storage.objects.get"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
