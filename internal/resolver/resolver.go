@@ -300,29 +300,33 @@ func ctyValueEqualsLiteral(actual cty.Value, expected any) bool {
 		}
 		return actual.AsString() == e
 	case int:
-		return numberEquals(actual, float64(e))
+		return numberEquals(actual, new(big.Float).SetInt64(int64(e)))
 	case int64:
-		return numberEquals(actual, float64(e))
+		return numberEquals(actual, new(big.Float).SetInt64(e))
 	case float64:
-		return numberEquals(actual, e)
+		return numberEquals(actual, big.NewFloat(e))
 	}
 	return false
 }
 
 // numberEquals reports whether actual is a cty.Number numerically equal
-// to expected. Comparison goes through *big.Float so a fractional
-// expected value or a large integer expected value (within float64's
-// range) does not lose precision in the conversion. The catalog's
-// numeric predicates today are all small integers, but routing through
-// big.Float removes a footgun if a future entry expresses something
-// like `quota_limit: 9007199254740993` (2^53 + 1, beyond float64's
-// integer-exact range).
-func numberEquals(actual cty.Value, expected float64) bool {
+// to expected. Both sides are *big.Float so integer literals above
+// float64's integer-exact range (2^53) are compared without precision
+// loss. The catalog's numeric predicates today are all small integers,
+// but the routing avoids a footgun if a future entry expresses
+// something like `quota_limit: 9007199254740993` (2^53 + 1): the int /
+// int64 paths in ctyValueEqualsLiteral construct expected via
+// big.Float.SetInt64, which is exact for any int64; the float64 path
+// uses big.NewFloat which captures the float64 value bit-exactly. A
+// previous iteration of this function cast int / int64 through
+// float64 first, which silently rounded large literals — that is the
+// regression resolver_test.go's TestResolveConditionalNumberInt64Exact
+// pins.
+func numberEquals(actual cty.Value, expected *big.Float) bool {
 	if !actual.Type().Equals(cty.Number) {
 		return false
 	}
-	expectedBF := new(big.Float).SetFloat64(expected)
-	return actual.AsBigFloat().Cmp(expectedBF) == 0
+	return actual.AsBigFloat().Cmp(expected) == 0
 }
 
 // addAll inserts every element of items into set as a struct{} membership
