@@ -28,6 +28,7 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
+	cmd.AddCommand(newCatalogCmd())
 	return cmd
 }
 
