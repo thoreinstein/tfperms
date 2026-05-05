@@ -103,31 +103,37 @@ func newCatalogStatsCmd() *cobra.Command {
 // header followed by "(none)" so a reader skimming the output cannot
 // mistake "no drift" for "drift section was omitted by accident".
 //
-// Flush errors from each tabwriter are propagated to the caller. If
-// stdout is a pipe or file and a write fails (e.g. broken pipe, disk
-// full), the command must surface it as a non-zero exit rather than
-// emitting a truncated report under a successful exit code — that
-// would let a CI consumer of `tfperms catalog stats` silently treat
-// partial output as authoritative.
+// All writes — both direct fmt.Fprint calls and tabwriter.Flush calls
+// — go through an errWriter that latches the first underlying
+// io.Writer error. Per-section flushes still wrap their failure with a
+// section-specific %w so the cobra "Error: ..." line identifies where
+// the pipe broke; the trailing errWriter check catches errors that
+// only surface in plain Fprintln calls (e.g. the empty-Drifting branch
+// that has no flush after it). The contract: if any write fails, the
+// command must exit non-zero rather than emit a truncated report under
+// a successful exit code — that would let a CI consumer of
+// `tfperms catalog stats` silently treat partial output as authoritative.
 func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) error {
-	fmt.Fprintln(w, "tfperms catalog stats")
-	fmt.Fprintln(w)
+	ew := &errWriter{w: w}
 
-	fmt.Fprintln(w, "Totals:")
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(ew, "tfperms catalog stats")
+	fmt.Fprintln(ew)
+
+	fmt.Fprintln(ew, "Totals:")
+	tw := tabwriter.NewWriter(ew, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(tw, "  resources\t%d\n", stats.TotalResources)
 	fmt.Fprintf(tw, "  data_sources\t%d\n", stats.TotalDataSources)
 	fmt.Fprintf(tw, "  iam_bindings\t%d\n", stats.TotalIAMBindings)
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("flush totals: %w", err)
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintln(w, "Coverage by service:")
+	fmt.Fprintln(ew, "Coverage by service:")
 	if len(stats.Services) == 0 {
-		fmt.Fprintln(w, "  (none)")
+		fmt.Fprintln(ew, "  (none)")
 	} else {
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		tw := tabwriter.NewWriter(ew, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "  service\ttotal\tempirical\tdocs+source")
 		for _, s := range stats.Services {
 			fmt.Fprintf(tw, "  %s\t%d\t%d\t%d\n",
@@ -137,13 +143,13 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) error {
 			return fmt.Errorf("flush coverage: %w", err)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintf(w, "Oldest verifications (up to %d):\n", catalogOldestLimit)
+	fmt.Fprintf(ew, "Oldest verifications (up to %d):\n", catalogOldestLimit)
 	if len(stats.OldestVerified) == 0 {
-		fmt.Fprintln(w, "  (none)")
+		fmt.Fprintln(ew, "  (none)")
 	} else {
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		tw := tabwriter.NewWriter(ew, 0, 0, 2, ' ', 0)
 		for _, e := range stats.OldestVerified {
 			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
 				e.Position, e.Section, e.Type, e.VerifiedAt)
@@ -152,13 +158,13 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) error {
 			return fmt.Errorf("flush oldest verifications: %w", err)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintln(w, "Missing provenance (TODO sentinels):")
+	fmt.Fprintln(ew, "Missing provenance (TODO sentinels):")
 	if len(stats.MissingProvenance) == 0 {
-		fmt.Fprintln(w, "  (none)")
+		fmt.Fprintln(ew, "  (none)")
 	} else {
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		tw := tabwriter.NewWriter(ew, 0, 0, 2, ' ', 0)
 		for _, p := range stats.MissingProvenance {
 			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
 				p.Position, p.Section, p.Type, p.Field)
@@ -167,17 +173,17 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) error {
 			return fmt.Errorf("flush missing provenance: %w", err)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew)
 
 	driftHeader := "Drift from provider " + stats.ReferenceVersion + ":"
 	if strings.TrimSpace(stats.ReferenceVersion) == "" {
 		driftHeader = "Drift (disabled — no reference version):"
 	}
-	fmt.Fprintln(w, driftHeader)
+	fmt.Fprintln(ew, driftHeader)
 	if len(stats.Drifting) == 0 {
-		fmt.Fprintln(w, "  (none)")
+		fmt.Fprintln(ew, "  (none)")
 	} else {
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		tw := tabwriter.NewWriter(ew, 0, 0, 2, ' ', 0)
 		for _, d := range stats.Drifting {
 			fmt.Fprintf(tw, "  %s\t%s/%s\t%s\n",
 				d.Position, d.Section, d.Type, d.TestedAgainstProvider)
@@ -186,7 +192,37 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) error {
 			return fmt.Errorf("flush drift: %w", err)
 		}
 	}
+	if ew.err != nil {
+		return fmt.Errorf("write catalog stats: %w", ew.err)
+	}
 	return nil
+}
+
+// errWriter is an io.Writer adapter that latches the first underlying
+// write error. It exists so renderCatalogStats can fan io.Writer
+// calls — both direct fmt.Fprint{ln,f} on the writer and tabwriter
+// instances built on top of it — through a single point that records
+// the first failure. The renderer drops fmt's own returned error
+// (consistent with idiomatic Go fmt usage), but errWriter preserves
+// it so the post-flush check at the end of renderCatalogStats can
+// surface it. Once an error is latched, subsequent Writes short-
+// circuit with (0, err); this is consistent with io.Writer's
+// "non-nil error if n < len(p)" contract and is what tabwriter
+// expects to bubble up through Flush.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (ew *errWriter) Write(p []byte) (int, error) {
+	if ew.err != nil {
+		return 0, ew.err
+	}
+	n, err := ew.w.Write(p)
+	if err != nil {
+		ew.err = err
+	}
+	return n, err
 }
 
 // catalogOldestLimit mirrors the cap inside ComputeStats (its
