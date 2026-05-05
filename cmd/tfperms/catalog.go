@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -175,8 +174,11 @@ func renderCatalogStats(w io.Writer, stats catalog.CatalogStats) error {
 	}
 	fmt.Fprintln(ew)
 
+	// ComputeStats trims ReferenceVersion at its entrance, so a plain
+	// equality check is sufficient here — a whitespace-only value cannot
+	// reach the renderer.
 	driftHeader := "Drift from provider " + stats.ReferenceVersion + ":"
-	if strings.TrimSpace(stats.ReferenceVersion) == "" {
+	if stats.ReferenceVersion == "" {
 		driftHeader = "Drift (disabled — no reference version):"
 	}
 	fmt.Fprintln(ew, driftHeader)
@@ -221,8 +223,18 @@ func (ew *errWriter) Write(p []byte) (int, error) {
 	n, err := ew.w.Write(p)
 	if err != nil {
 		ew.err = err
+		return n, err
 	}
-	return n, err
+	// A writer that returns (n < len(p), nil) violates io.Writer's
+	// contract but is observable in the wild (a misbehaving Stdout
+	// pipe, a custom test double). Latch io.ErrShortWrite so the
+	// trailing ew.err check still catches the truncation rather than
+	// letting renderCatalogStats exit zero with a half-written report.
+	if n < len(p) {
+		ew.err = io.ErrShortWrite
+		return n, io.ErrShortWrite
+	}
+	return n, nil
 }
 
 // catalogOldestLimit mirrors the cap inside ComputeStats (its

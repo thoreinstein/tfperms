@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -290,5 +291,43 @@ func TestCatalogStatsRendererPropagatesPlainWriteErrors(t *testing.T) {
 	}
 	if !errors.Is(err, errBrokenPipe) {
 		t.Errorf("renderCatalogStats error chain does not wrap the underlying writer error.\nerr: %v", err)
+	}
+}
+
+// shortWriter accepts every Write but reports back only the first byte
+// as written, with a nil error. This violates io.Writer's contract — a
+// well-behaved writer that writes fewer bytes than requested must
+// return a non-nil error — but real-world misbehaving writers exist
+// (custom test doubles, broken stdout wrappers), so errWriter is
+// expected to detect the short write and latch io.ErrShortWrite. A
+// regression that drops the n < len(p) check would let the renderer
+// silently truncate output and exit zero.
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return 1, nil
+}
+
+// TestCatalogStatsRendererPropagatesShortWrites pins the contract that
+// errWriter detects writers returning (n < len(p), nil). Without the
+// short-write latch, every Fprintln/Fprintf would silently lose bytes
+// and the trailing ew.err check would return nil — exactly the silent
+// truncation the renderer is supposed to prevent.
+func TestCatalogStatsRendererPropagatesShortWrites(t *testing.T) {
+	stats := catalog.CatalogStats{
+		TotalResources:   1,
+		ReferenceVersion: "6.15.0",
+	}
+
+	err := renderCatalogStats(shortWriter{}, stats)
+	if err == nil {
+		t.Fatal("renderCatalogStats with a short writer returned nil; " +
+			"expected io.ErrShortWrite to be latched and surfaced")
+	}
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Errorf("renderCatalogStats error chain does not wrap io.ErrShortWrite.\nerr: %v", err)
 	}
 }

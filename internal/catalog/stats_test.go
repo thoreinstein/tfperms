@@ -474,6 +474,36 @@ func TestComputeStatsDriftingDisabled(t *testing.T) {
 	}
 }
 
+// TestComputeStatsReferenceVersionWhitespaceNormalised pins the
+// contract that ComputeStats trims its referenceVersion argument once
+// at the top, so a whitespace-only value behaves identically to the
+// empty string: drift detection is disabled and CatalogStats.ReferenceVersion
+// holds the trimmed empty result. Without normalisation, a value like
+// "  " would slip past the `referenceVersion != ""` enable-check and
+// produce the cosmetic header bug "Drift from provider   :" downstream
+// while also running the drift comparator against an unparseable
+// version — a category of false-negative the renderer's "disabled"
+// branch is meant to suppress.
+func TestComputeStatsReferenceVersionWhitespaceNormalised(t *testing.T) {
+	c := newCatalog()
+	c.Resources["google_test"] = &ResourceEntry{
+		Type:                  "google_test",
+		Position:              Position{File: "test.yaml", Line: 1},
+		TestedAgainstProvider: ">=99.0.0,<100.0.0",
+	}
+
+	stats := ComputeStats(c, "  ")
+	if stats.ReferenceVersion != "" {
+		t.Errorf("ReferenceVersion = %q, want %q (whitespace-only input must be trimmed to empty)",
+			stats.ReferenceVersion, "")
+	}
+	if len(stats.Drifting) != 0 {
+		t.Errorf("Drifting len = %d with whitespace-only referenceVersion, want 0 "+
+			"(drift detection must be disabled, matching the empty-string behaviour)",
+			len(stats.Drifting))
+	}
+}
+
 // TestParseVersion exercises the small numeric-component parser. The
 // satisfiesConstraint flow depends on this, so a regression here
 // would silently flip drift reports. The wildcard cases (`6.x`,
