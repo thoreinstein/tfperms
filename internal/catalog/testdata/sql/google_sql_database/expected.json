@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "cloudsql.databases.get"
+  ],
+  "apply": [
+    "cloudsql.databases.create",
+    "cloudsql.databases.delete",
+    "cloudsql.databases.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

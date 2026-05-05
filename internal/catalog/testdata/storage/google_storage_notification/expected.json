@@ -1,0 +1,10 @@
+{
+  "plan": [
+    "storage.objects.list"
+  ],
+  "apply": [
+    "storage.objects.list"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

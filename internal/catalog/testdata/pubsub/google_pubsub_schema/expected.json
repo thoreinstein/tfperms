@@ -1,0 +1,11 @@
+{
+  "plan": [
+    "pubsub.schemas.get"
+  ],
+  "apply": [
+    "pubsub.schemas.create",
+    "pubsub.schemas.delete"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

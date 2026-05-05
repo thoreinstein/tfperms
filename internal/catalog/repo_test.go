@@ -474,6 +474,49 @@ func TestRepositoryCatalogPermissionsAreLocked(t *testing.T) {
 			update: []string{"resourcemanager.projects.update"},
 			delete: []string{"resourcemanager.projects.delete"},
 		},
+		"google_logging_project_sink": {
+			plan:   []string{"logging.sinks.get"},
+			create: []string{"logging.sinks.create"},
+			update: []string{"logging.sinks.update"},
+			delete: []string{"logging.sinks.delete"},
+		},
+		"google_cloudfunctions_function": {
+			plan: []string{"cloudfunctions.functions.get"},
+			create: []string{
+				"cloudfunctions.functions.create",
+				"iam.serviceAccounts.actAs",
+				"storage.objects.get",
+			},
+			update: []string{"cloudfunctions.functions.update"},
+			delete: []string{"cloudfunctions.functions.delete"},
+		},
+		"google_pubsub_schema": {
+			plan:   []string{"pubsub.schemas.get"},
+			create: []string{"pubsub.schemas.create"},
+			// Schemas are immutable: any field change forces replacement.
+			update: []string{},
+			delete: []string{"pubsub.schemas.delete"},
+		},
+		"google_sql_database": {
+			plan:   []string{"cloudsql.databases.get"},
+			create: []string{"cloudsql.databases.create"},
+			update: []string{"cloudsql.databases.update"},
+			delete: []string{"cloudsql.databases.delete"},
+		},
+		"google_sql_user": {
+			plan:   []string{"cloudsql.users.list"},
+			create: []string{"cloudsql.users.create"},
+			update: []string{"cloudsql.users.update"},
+			delete: []string{"cloudsql.users.delete"},
+		},
+		"google_storage_notification": {
+			plan:   []string{"storage.objects.list"},
+			create: []string{"storage.objects.list"},
+			// Notifications are immutable: any field change forces
+			// replacement.
+			update: []string{},
+			delete: []string{"storage.objects.list"},
+		},
 	}
 
 	expectedDataSources := map[string]expectedDataSource{

@@ -1,0 +1,40 @@
+# Cloud Functions (Gen 1) permission catalog.
+#
+# google_cloudfunctions_function targets the Gen 1 surface; Gen 2 is
+# tracked separately as google_cloudfunctions2_function and not yet
+# in the catalog. Verified via the docs+source procedure
+# (CONTRIBUTING.md).
+#
+# Two non-obvious permissions sit on the create stage:
+#
+#   - storage.objects.get is needed to read the source archive from
+#     the GCS bucket pointed at by source_archive_bucket /
+#     source_archive_object. The Cloud Functions API issues this read
+#     against the deploying caller's identity at create time.
+#   - iam.serviceAccounts.actAs is needed when service_account_email
+#     names a runtime SA different from the default App Engine one.
+#     We list it unconditionally because the resolver does not
+#     currently distinguish "default SA" vs "explicit SA"; the
+#     additional grant is harmless when the default SA is in effect.
+
+resources:
+  google_cloudfunctions_function:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/functions/docs/reference/iam/permissions
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/cloudfunctions/resource_cloudfunctions_function.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - cloudfunctions.functions.get
+      create:
+        - cloudfunctions.functions.create
+        - iam.serviceAccounts.actAs
+        - storage.objects.get
+      update:
+        - cloudfunctions.functions.update
+      delete:
+        - cloudfunctions.functions.delete

@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "logging.sinks.get"
+  ],
+  "apply": [
+    "logging.sinks.create",
+    "logging.sinks.delete",
+    "logging.sinks.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
