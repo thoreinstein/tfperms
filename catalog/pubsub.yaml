@@ -1,6 +1,6 @@
 # Pub/Sub permission catalog.
 #
-# pubsub topic + subscription are the canonical event-driven backbone
+# Pub/Sub topics + subscriptions are the canonical event-driven backbone
 # for GCP and the most-used messaging primitives. Both entries use the
 # docs+source verification procedure (CONTRIBUTING.md): the provider
 # source was cross-referenced with the GCP IAM permission reference to

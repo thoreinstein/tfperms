@@ -4,8 +4,8 @@
 # configuration touches: instances, networks, and subnetworks. Each
 # entry is verified via the docs+source procedure (CONTRIBUTING.md):
 # the API calls in the provider source were cross-referenced with the
-# GCP IAM permission reference, and one IAM permission was recorded
-# per Terraform lifecycle stage.
+# GCP IAM permission reference, recording one IAM permission per API
+# call, grouped by Terraform lifecycle stage.
 #
 # Resource style follows storage.yaml: one resource per entry,
 # permissions sorted alphabetically per stage, comments above
