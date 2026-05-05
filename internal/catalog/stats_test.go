@@ -345,6 +345,118 @@ func TestComputeStatsDrifting(t *testing.T) {
 	}
 }
 
+// TestComputeStatsDriftingWildcardShortForm pins the behaviour around
+// the `6.x` short form that validator.go documents as accepted (see
+// testedAgainstProviderConstraintPattern at validator.go:58-66). The
+// previous parseVersion implementation truncated `6.x` to a malformed
+// `6.` core and bailed out; computeDrifting then silently dropped the
+// entry from the drift report. This test pins the corrected reading:
+// `6.x` matches any 6.y.z reference, `7.x` does not, and the explicit
+// `>=` / `~>` operators behave as a lower bound at the prefix.
+func TestComputeStatsDriftingWildcardShortForm(t *testing.T) {
+	c := newCatalog()
+	add := func(typ, tested string) {
+		c.Resources[typ] = &ResourceEntry{
+			Type:                  typ,
+			Position:              Position{File: "test.yaml", Line: 1},
+			TestedAgainstProvider: tested,
+			Verification: Verification{
+				Method:                  VerificationMethodDocsSource,
+				SourceURLs:              []string{"https://example.test/iam"},
+				VerifiedAt:              "2026-01-01",
+				VerifiedProviderVersion: "6.0.0",
+			},
+		}
+	}
+	// `6.x` (bare → defaults to `=`) matches reference 6.15.0.
+	add("google_wildcard_in_range", "6.x")
+	// `6.X` (uppercase wildcard) matches identically.
+	add("google_wildcard_uppercase", "6.X")
+	// `6.0.x` — leading prefix [6,0] does not match reference [6,15,0]
+	// in the first two components, so this should drift.
+	add("google_wildcard_minor_pin", "6.0.x")
+	// `7.x` — major mismatch, drifts.
+	add("google_wildcard_too_high", "7.x")
+	// `>= 6.x` — lower bound at 6.0.0, satisfied.
+	add("google_wildcard_lower_bound", ">= 6.x")
+	// `>= 7.x` — lower bound at 7.0.0, drifts.
+	add("google_wildcard_lower_too_high", ">= 7.x")
+	// `~> 6.x` — pessimistic lower bound, satisfied.
+	add("google_wildcard_pessimistic_ok", "~> 6.x")
+	// `!= 7.x` — reference does not start with [7], so satisfied.
+	add("google_wildcard_neq_other_major", "!= 7.x")
+	// `!= 6.x` — reference starts with [6], so drifts.
+	add("google_wildcard_neq_self_major", "!= 6.x")
+
+	stats := ComputeStats(c, "6.15.0")
+	wantTypes := []string{
+		"google_wildcard_lower_too_high",
+		"google_wildcard_minor_pin",
+		"google_wildcard_neq_self_major",
+		"google_wildcard_too_high",
+	}
+	if len(stats.Drifting) != len(wantTypes) {
+		t.Fatalf("Drifting len = %d, want %d: %+v",
+			len(stats.Drifting), len(wantTypes), stats.Drifting)
+	}
+	for i, want := range wantTypes {
+		if stats.Drifting[i].Type != want {
+			t.Errorf("Drifting[%d].Type = %q, want %q",
+				i, stats.Drifting[i].Type, want)
+		}
+	}
+}
+
+// TestComputeStatsOldestVerifiedSkipsInvalidDates pins the contract
+// the doc-comment on computeOldestVerified promises: an entry whose
+// verified_at fails to parse against verifiedAtLayout is dropped from
+// the slice rather than sorted to the front. Load() rejects malformed
+// dates at validation time, so this exercises the defensive branch a
+// hand-rolled fixture would otherwise hit — and prevents a regression
+// where the renderer "oldest" section is dominated by a typo.
+func TestComputeStatsOldestVerifiedSkipsInvalidDates(t *testing.T) {
+	c := newCatalog()
+	c.Resources["google_blank_date"] = &ResourceEntry{
+		Type:     "google_blank_date",
+		Position: Position{File: "test.yaml", Line: 1},
+		Verification: Verification{
+			VerifiedAt: "",
+		},
+	}
+	c.Resources["google_garbage_date"] = &ResourceEntry{
+		Type:     "google_garbage_date",
+		Position: Position{File: "test.yaml", Line: 2},
+		Verification: Verification{
+			VerifiedAt: "yesterday",
+		},
+	}
+	c.Resources["google_almost_date"] = &ResourceEntry{
+		Type:     "google_almost_date",
+		Position: Position{File: "test.yaml", Line: 3},
+		Verification: Verification{
+			// Wrong layout — DD-MM-YYYY rather than YYYY-MM-DD.
+			VerifiedAt: "01-06-2024",
+		},
+	}
+	c.Resources["google_real_date"] = &ResourceEntry{
+		Type:     "google_real_date",
+		Position: Position{File: "test.yaml", Line: 4},
+		Verification: Verification{
+			VerifiedAt: "2024-06-01",
+		},
+	}
+
+	stats := ComputeStats(c, "")
+	if len(stats.OldestVerified) != 1 {
+		t.Fatalf("OldestVerified len = %d, want 1 (only the well-formed date should appear): %+v",
+			len(stats.OldestVerified), stats.OldestVerified)
+	}
+	if stats.OldestVerified[0].Type != "google_real_date" {
+		t.Errorf("OldestVerified[0].Type = %q, want google_real_date",
+			stats.OldestVerified[0].Type)
+	}
+}
+
 // TestComputeStatsDriftingDisabled confirms that an empty
 // referenceVersion turns off drift detection entirely. The cmd layer
 // uses this in fixture-driven golden tests to keep the drift section
@@ -364,31 +476,46 @@ func TestComputeStatsDriftingDisabled(t *testing.T) {
 
 // TestParseVersion exercises the small numeric-component parser. The
 // satisfiesConstraint flow depends on this, so a regression here
-// would silently flip drift reports.
+// would silently flip drift reports. The wildcard cases (`6.x`,
+// `6.0.x`) are pinned because the validator at validator.go:58-66
+// documents them as accepted constraint shapes — a regression that
+// dropped them would silently omit valid catalog entries from the
+// drift report (the bug review #1 caught).
 func TestParseVersion(t *testing.T) {
 	cases := []struct {
-		in     string
-		want   []int
-		wantOK bool
+		in           string
+		want         []int
+		wantIsPrefix bool
+		wantOK       bool
 	}{
-		{"6.15.0", []int{6, 15, 0}, true},
-		{"6.0", []int{6, 0}, true},
-		{"6", []int{6}, true},
-		{"5.0.0-rc1+build.7", []int{5, 0, 0}, true},
-		{"  6.15.0  ", []int{6, 15, 0}, true},
-		{"", nil, false},
-		{"abc", nil, false},
-		{"6..0", nil, false},
-		{"6.", nil, false},
+		{"6.15.0", []int{6, 15, 0}, false, true},
+		{"6.0", []int{6, 0}, false, true},
+		{"6", []int{6}, false, true},
+		{"5.0.0-rc1+build.7", []int{5, 0, 0}, false, true},
+		{"  6.15.0  ", []int{6, 15, 0}, false, true},
+		// Wildcard short forms — the contract documented at
+		// validator.go's testedAgainstProviderConstraintPattern.
+		{"6.x", []int{6}, true, true},
+		{"6.X", []int{6}, true, true},
+		{"6.0.x", []int{6, 0}, true, true},
+		{"  6.x  ", []int{6}, true, true},
+		{"", nil, false, false},
+		{"abc", nil, false, false},
+		{"6..0", nil, false, false},
+		{"6.", nil, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
-			got, ok := parseVersion(tc.in)
+			got, isPrefix, ok := parseVersion(tc.in)
 			if ok != tc.wantOK {
 				t.Errorf("parseVersion(%q) ok = %v, want %v", tc.in, ok, tc.wantOK)
 			}
 			if !ok {
 				return
+			}
+			if isPrefix != tc.wantIsPrefix {
+				t.Errorf("parseVersion(%q) isPrefix = %v, want %v",
+					tc.in, isPrefix, tc.wantIsPrefix)
 			}
 			if len(got) != len(tc.want) {
 				t.Errorf("parseVersion(%q) = %v, want %v", tc.in, got, tc.want)
