@@ -211,3 +211,84 @@ func TestCatalogStatsRendererPropagatesFlushErrors(t *testing.T) {
 		t.Errorf("renderCatalogStats error chain does not wrap the underlying writer error.\nerr: %v", err)
 	}
 }
+
+// substringFailingWriter accepts every Write whose payload does not
+// contain failOn, and once it sees failOn (or any subsequent write)
+// returns errBrokenPipe with n=0. It is the inverse of failingWriter:
+// failingWriter dies on a byte budget (which lands inside an early
+// tabwriter buffer), substringFailingWriter dies deterministically on
+// a specific direct write so the test can target a post-flush plain
+// Fprintln that has no tabwriter behind it. Anything we successfully
+// wrote first is captured for diagnostic purposes.
+type substringFailingWriter struct {
+	failOn   string
+	failed   bool
+	captured bytes.Buffer
+}
+
+func (s *substringFailingWriter) Write(p []byte) (int, error) {
+	if s.failed {
+		return 0, errBrokenPipe
+	}
+	if bytes.Contains(p, []byte(s.failOn)) {
+		s.failed = true
+		return 0, errBrokenPipe
+	}
+	return s.captured.Write(p)
+}
+
+// TestCatalogStatsRendererPropagatesPlainWriteErrors is the
+// post-flush companion to TestCatalogStatsRendererPropagatesFlushErrors.
+// The earlier test only forces a failure during a tabwriter flush —
+// because byteBudget=16 dies inside the first totals flush — so it
+// never reaches a plain fmt.Fprintln write that has no flush behind
+// it. The reviewer flagged this gap: in the empty-Drifting branch the
+// renderer's last operation is a direct `fmt.Fprintln(w, "  (none)")`
+// after the last tabwriter has already flushed, and the previous
+// implementation dropped that write's error.
+//
+// The fixture sets Drifting=nil so the renderer takes the (none)
+// branch with no trailing flush. The writer fails on the drift section
+// header — a direct write that lives after every tabwriter.Flush in
+// the function — so a regression that removes the post-flush errWriter
+// check (or reverts to fmt.Fprintln on the bare writer) will let
+// renderCatalogStats return nil and this test will fail.
+func TestCatalogStatsRendererPropagatesPlainWriteErrors(t *testing.T) {
+	stats := catalog.CatalogStats{
+		TotalResources:   1,
+		ReferenceVersion: "6.15.0",
+		Services: []catalog.ServiceStats{
+			{Service: "compute", Total: 1, Empirical: 1, DocsSource: 0},
+		},
+		OldestVerified: []catalog.AgingEntry{
+			{
+				Section:    "resources",
+				Type:       "google_compute_instance",
+				VerifiedAt: "2024-06-01",
+				Position:   catalog.Position{File: "compute.yaml", Line: 12},
+			},
+		},
+		MissingProvenance: []catalog.ProvenanceIssue{
+			{
+				Section:  "resources",
+				Type:     "google_storage_bucket",
+				Field:    "verification.source_urls[0]",
+				Position: catalog.Position{File: "storage.yaml", Line: 19},
+			},
+		},
+		// Drifting intentionally nil: renderer takes the "(none)"
+		// branch with no tabwriter, so the only writes after the last
+		// successful flush are plain Fprintlns.
+	}
+
+	w := &substringFailingWriter{failOn: "Drift from provider"}
+	err := renderCatalogStats(w, stats)
+	if err == nil {
+		t.Fatalf("renderCatalogStats with a writer that fails on the drift header returned nil; "+
+			"expected the broken-pipe error from the post-flush plain-write path.\ncaptured output:\n%s",
+			w.captured.String())
+	}
+	if !errors.Is(err, errBrokenPipe) {
+		t.Errorf("renderCatalogStats error chain does not wrap the underlying writer error.\nerr: %v", err)
+	}
+}
