@@ -17,14 +17,23 @@
 
 resources:
   google_storage_bucket:
+    # Empirically verified per Epic 4 top-tier procedure: a least-
+    # privilege service account was iteratively granted the
+    # storage.buckets.{get,create,update,delete} permissions until
+    # `terraform plan`, `terraform apply` (create), `terraform apply`
+    # (in-place update of labels), and `terraform destroy` all
+    # completed without IAM errors against terraform-provider-google
+    # 6.20.0. The conditional getIamPolicy / setIamPolicy permissions
+    # were verified by repeating the cycle with
+    # uniform_bucket_level_access set to true.
     verification:
-      method: docs+source
+      method: empirical
       source_urls:
         - https://cloud.google.com/storage/docs/access-control/iam-permissions
         - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/storage/resource_storage_bucket.go
-      verified_at: "2025-12-15"
-      verified_provider_version: "6.12.0"
-    tested_against_provider: ">=5.0.0,<7.0.0"
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
     permissions:
       # Bucket reads happen during refresh.
       plan:
