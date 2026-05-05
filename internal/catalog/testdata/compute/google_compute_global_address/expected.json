@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.globalAddresses.get"
+  ],
+  "apply": [
+    "compute.globalAddresses.create",
+    "compute.globalAddresses.delete",
+    "compute.globalAddresses.setLabels"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

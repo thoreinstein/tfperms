@@ -89,3 +89,335 @@ resources:
         - compute.subnetworks.update
       delete:
         - compute.subnetworks.delete
+
+  # Regional static external/internal IP. Updates change subnet
+  # binding or labels and go through the generic update endpoint.
+  google_compute_address:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_address.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.addresses.get
+      create:
+        - compute.addresses.create
+      update:
+        - compute.addresses.setLabels
+      delete:
+        - compute.addresses.delete
+
+  # Global static external IP, used by global load balancers and global
+  # forwarding rules. Same shape as compute_address but a different IAM
+  # surface (globalAddresses.*).
+  google_compute_global_address:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_global_address.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.globalAddresses.get
+      create:
+        - compute.globalAddresses.create
+      update:
+        - compute.globalAddresses.setLabels
+      delete:
+        - compute.globalAddresses.delete
+
+  # Standalone persistent disk (boot disks for VMs are exercised inline
+  # under google_compute_instance). Updates cover labels, size grow,
+  # and resource policy attach/detach.
+  google_compute_disk:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_disk.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.disks.get
+      create:
+        - compute.disks.create
+      update:
+        - compute.disks.setLabels
+        - compute.disks.update
+      delete:
+        - compute.disks.delete
+
+  # VPC firewall rule. Update covers source/target/port edits which the
+  # provider issues against the generic update endpoint.
+  google_compute_firewall:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_firewall.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.firewalls.get
+      create:
+        - compute.firewalls.create
+      update:
+        - compute.firewalls.update
+      delete:
+        - compute.firewalls.delete
+
+  # VPC static route. Routes are immutable on the GCP side; any
+  # field change is implemented as a delete + recreate by the
+  # provider, so there is no update permission to grant.
+  google_compute_route:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_route.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.routes.get
+      create:
+        - compute.routes.create
+      update: []
+      delete:
+        - compute.routes.delete
+
+  # Cloud Router. Update covers BGP attribute changes. Cloud NAT and
+  # interfaces are tracked as separate Terraform resources and not
+  # bundled here.
+  google_compute_router:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_router.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.routers.get
+      create:
+        - compute.routers.create
+      update:
+        - compute.routers.update
+      delete:
+        - compute.routers.delete
+
+  # Generic health check (the v1 healthChecks resource — not the
+  # legacy http_health_check / https_health_check).
+  google_compute_health_check:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_health_check.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.healthChecks.get
+      create:
+        - compute.healthChecks.create
+      update:
+        - compute.healthChecks.update
+      delete:
+        - compute.healthChecks.delete
+
+  # Instance template used by managed instance groups. Templates are
+  # immutable: any field change forces replacement, so no update
+  # permission is needed. Create needs:
+  #
+  #   - compute.subnetworks.use — the template binds a subnetwork.
+  #   - iam.serviceAccounts.actAs — the template names the runtime SA
+  #     for VMs that will be cloned from it.
+  google_compute_instance_template:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_instance_template.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.instanceTemplates.get
+      create:
+        - compute.instanceTemplates.create
+        - compute.subnetworks.use
+        - iam.serviceAccounts.actAs
+      update: []
+      delete:
+        - compute.instanceTemplates.delete
+
+  # Unmanaged instance group — a static collection of VMs the caller
+  # registers explicitly. The managed-group counterpart is tracked as
+  # google_compute_instance_group_manager.
+  google_compute_instance_group:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_instance_group.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.instanceGroups.get
+      create:
+        - compute.instanceGroups.create
+      update:
+        - compute.instanceGroups.update
+      delete:
+        - compute.instanceGroups.delete
+
+  # Managed instance group. Create requires the template's
+  # useReadOnly permission so the MIG can clone from it, plus
+  # iam.serviceAccounts.actAs for the SA the cloned VMs run as.
+  google_compute_instance_group_manager:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_instance_group_manager.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.instanceGroupManagers.get
+      create:
+        - compute.instanceGroupManagers.create
+        - compute.instanceTemplates.useReadOnly
+        - iam.serviceAccounts.actAs
+      update:
+        - compute.instanceGroupManagers.update
+      delete:
+        - compute.instanceGroupManagers.delete
+
+  # Regional forwarding rule (network LB / internal LB front end).
+  # Create needs compute.addresses.use when bound to a static IP; the
+  # permission is included unconditionally because the resolver does
+  # not currently distinguish ephemeral vs reserved IPs.
+  google_compute_forwarding_rule:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_forwarding_rule.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.forwardingRules.get
+      create:
+        - compute.addresses.use
+        - compute.forwardingRules.create
+      update:
+        - compute.forwardingRules.update
+      delete:
+        - compute.forwardingRules.delete
+
+  # Global forwarding rule (HTTPS LB front end). Same shape as the
+  # regional flavour but against globalForwardingRules / globalAddresses.
+  google_compute_global_forwarding_rule:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_global_forwarding_rule.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.globalForwardingRules.get
+      create:
+        - compute.globalAddresses.use
+        - compute.globalForwardingRules.create
+      update:
+        - compute.globalForwardingRules.update
+      delete:
+        - compute.globalForwardingRules.delete
+
+  # Global backend service (HTTPS LB / TCP proxy LB backend). Update
+  # covers backend swaps, health-check rebind, and timeout changes.
+  google_compute_backend_service:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_backend_service.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.backendServices.get
+      create:
+        - compute.backendServices.create
+      update:
+        - compute.backendServices.update
+      delete:
+        - compute.backendServices.delete
+
+  # Network LB target pool (legacy network LB backend).
+  google_compute_target_pool:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_target_pool.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.targetPools.get
+      create:
+        - compute.targetPools.create
+      update:
+        - compute.targetPools.update
+      delete:
+        - compute.targetPools.delete
+
+  # URL map (HTTPS LB request routing). Update covers host/path-matcher
+  # edits and default-service swaps.
+  google_compute_url_map:
+    verification:
+      method: docs+source
+      source_urls:
+        - https://cloud.google.com/compute/docs/access/iam
+        - https://github.com/hashicorp/terraform-provider-google/blob/main/google/services/compute/resource_compute_url_map.go
+      verified_at: "2026-05-05"
+      verified_provider_version: "6.20.0"
+    tested_against_provider: ">=6.0.0,<7.0.0"
+    permissions:
+      plan:
+        - compute.urlMaps.get
+      create:
+        - compute.urlMaps.create
+      update:
+        - compute.urlMaps.update
+      delete:
+        - compute.urlMaps.delete

@@ -1,0 +1,13 @@
+{
+  "plan": [
+    "compute.disks.get"
+  ],
+  "apply": [
+    "compute.disks.create",
+    "compute.disks.delete",
+    "compute.disks.setLabels",
+    "compute.disks.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

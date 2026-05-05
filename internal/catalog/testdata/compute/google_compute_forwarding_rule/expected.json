@@ -1,0 +1,13 @@
+{
+  "plan": [
+    "compute.forwardingRules.get"
+  ],
+  "apply": [
+    "compute.addresses.use",
+    "compute.forwardingRules.create",
+    "compute.forwardingRules.delete",
+    "compute.forwardingRules.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

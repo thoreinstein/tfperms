@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.firewalls.get"
+  ],
+  "apply": [
+    "compute.firewalls.create",
+    "compute.firewalls.delete",
+    "compute.firewalls.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

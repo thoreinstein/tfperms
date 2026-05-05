@@ -271,6 +271,115 @@ func TestRepositoryCatalogPermissionsAreLocked(t *testing.T) {
 			update: []string{"compute.subnetworks.update"},
 			delete: []string{"compute.subnetworks.delete"},
 		},
+		"google_compute_address": {
+			plan:   []string{"compute.addresses.get"},
+			create: []string{"compute.addresses.create"},
+			update: []string{"compute.addresses.setLabels"},
+			delete: []string{"compute.addresses.delete"},
+		},
+		"google_compute_global_address": {
+			plan:   []string{"compute.globalAddresses.get"},
+			create: []string{"compute.globalAddresses.create"},
+			update: []string{"compute.globalAddresses.setLabels"},
+			delete: []string{"compute.globalAddresses.delete"},
+		},
+		"google_compute_disk": {
+			plan:   []string{"compute.disks.get"},
+			create: []string{"compute.disks.create"},
+			update: []string{
+				"compute.disks.setLabels",
+				"compute.disks.update",
+			},
+			delete: []string{"compute.disks.delete"},
+		},
+		"google_compute_firewall": {
+			plan:   []string{"compute.firewalls.get"},
+			create: []string{"compute.firewalls.create"},
+			update: []string{"compute.firewalls.update"},
+			delete: []string{"compute.firewalls.delete"},
+		},
+		"google_compute_route": {
+			plan:   []string{"compute.routes.get"},
+			create: []string{"compute.routes.create"},
+			// Routes are immutable: any field change is delete + recreate.
+			update: []string{},
+			delete: []string{"compute.routes.delete"},
+		},
+		"google_compute_router": {
+			plan:   []string{"compute.routers.get"},
+			create: []string{"compute.routers.create"},
+			update: []string{"compute.routers.update"},
+			delete: []string{"compute.routers.delete"},
+		},
+		"google_compute_health_check": {
+			plan:   []string{"compute.healthChecks.get"},
+			create: []string{"compute.healthChecks.create"},
+			update: []string{"compute.healthChecks.update"},
+			delete: []string{"compute.healthChecks.delete"},
+		},
+		"google_compute_instance_template": {
+			plan: []string{"compute.instanceTemplates.get"},
+			create: []string{
+				"compute.instanceTemplates.create",
+				"compute.subnetworks.use",
+				"iam.serviceAccounts.actAs",
+			},
+			// Templates are immutable: any field change forces replacement.
+			update: []string{},
+			delete: []string{"compute.instanceTemplates.delete"},
+		},
+		"google_compute_instance_group": {
+			plan:   []string{"compute.instanceGroups.get"},
+			create: []string{"compute.instanceGroups.create"},
+			update: []string{"compute.instanceGroups.update"},
+			delete: []string{"compute.instanceGroups.delete"},
+		},
+		"google_compute_instance_group_manager": {
+			plan: []string{"compute.instanceGroupManagers.get"},
+			create: []string{
+				"compute.instanceGroupManagers.create",
+				"compute.instanceTemplates.useReadOnly",
+				"iam.serviceAccounts.actAs",
+			},
+			update: []string{"compute.instanceGroupManagers.update"},
+			delete: []string{"compute.instanceGroupManagers.delete"},
+		},
+		"google_compute_forwarding_rule": {
+			plan: []string{"compute.forwardingRules.get"},
+			create: []string{
+				"compute.addresses.use",
+				"compute.forwardingRules.create",
+			},
+			update: []string{"compute.forwardingRules.update"},
+			delete: []string{"compute.forwardingRules.delete"},
+		},
+		"google_compute_global_forwarding_rule": {
+			plan: []string{"compute.globalForwardingRules.get"},
+			create: []string{
+				"compute.globalAddresses.use",
+				"compute.globalForwardingRules.create",
+			},
+			update: []string{"compute.globalForwardingRules.update"},
+			delete: []string{"compute.globalForwardingRules.delete"},
+		},
+		"google_compute_backend_service": {
+			plan:   []string{"compute.backendServices.get"},
+			create: []string{"compute.backendServices.create"},
+			update: []string{"compute.backendServices.update"},
+			delete: []string{"compute.backendServices.delete"},
+		},
+		"google_compute_target_pool": {
+			plan:   []string{"compute.targetPools.get"},
+			create: []string{"compute.targetPools.create"},
+			update: []string{"compute.targetPools.update"},
+			delete: []string{"compute.targetPools.delete"},
+		},
+		"google_compute_url_map": {
+			plan:   []string{"compute.urlMaps.get"},
+			create: []string{"compute.urlMaps.create"},
+			update: []string{"compute.urlMaps.update"},
+			delete: []string{"compute.urlMaps.delete"},
+		},
 		"google_bigquery_dataset": {
 			plan:   []string{"bigquery.datasets.get"},
 			create: []string{"bigquery.datasets.create"},

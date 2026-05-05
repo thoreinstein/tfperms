@@ -1,0 +1,12 @@
+{
+  "plan": [
+    "compute.instanceGroups.get"
+  ],
+  "apply": [
+    "compute.instanceGroups.create",
+    "compute.instanceGroups.delete",
+    "compute.instanceGroups.update"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

@@ -1,0 +1,13 @@
+{
+  "plan": [
+    "compute.instanceTemplates.get"
+  ],
+  "apply": [
+    "compute.instanceTemplates.create",
+    "compute.instanceTemplates.delete",
+    "compute.subnetworks.use",
+    "iam.serviceAccounts.actAs"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}

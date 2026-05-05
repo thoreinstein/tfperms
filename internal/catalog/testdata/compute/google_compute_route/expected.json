@@ -1,0 +1,11 @@
+{
+  "plan": [
+    "compute.routes.get"
+  ],
+  "apply": [
+    "compute.routes.create",
+    "compute.routes.delete"
+  ],
+  "unknowns": [],
+  "unresolved": []
+}
