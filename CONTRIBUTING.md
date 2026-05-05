@@ -183,15 +183,16 @@ their own machine.
 
 ```sh
 tfperms catalog scaffold google_dataplex_lake
-# wrote stub for google_dataplex_lake to catalog/dataplex.yaml
+# created stub for google_dataplex_lake in catalog/dataplex.yaml
 ```
 
 The command infers `dataplex.yaml` from the `google_dataplex_*`
 prefix, creates the file (the service had no prior catalog
 coverage), and writes one `resources:` entry with every required
-schema field set to a `TODO` sentinel. The file parses but
-deliberately fails `make catalog-validate` until the contributor
-fills the values in.
+schema field set to a `TODO` sentinel. The verb in the message is
+`created` for a fresh file and `merged` when the scaffold appended
+to an existing service file. The file parses but deliberately fails
+`make catalog-validate` until the contributor fills the values in.
 
 **2. Map permissions from the provider source.** Open the
 [terraform-provider-google][1] file
