@@ -102,11 +102,14 @@ import (
 //
 // Field invariants:
 //
-//   - Every slice field is non-nil on a Result returned by Resolve.
-//     Empty results render as `[]` in JSON rather than `null`, so
-//     golden files stay shape-stable across runs and downstream
+//   - Every top-level slice field is non-nil on a Result returned by
+//     Resolve. Empty results render as `[]` in JSON rather than `null`,
+//     so golden files stay shape-stable across runs and downstream
 //     consumers (the reporter, future JSON output formats) never have
-//     to nil-check.
+//     to nil-check. The one exception is UnresolvedConditional.ModulePath
+//     inside the Unresolved slice: it is tagged `omitempty`, so
+//     root-level resources omit `module_path` from their JSON object
+//     entirely rather than rendering it as `[]` or `null`.
 //   - PlanPerms, ApplyOnlyPerms, and TotalApplyPerms are sorted
 //     ascending and deduplicated. Order is a contract: the reporter
 //     pins flat-list output to the resolver's order, and the
@@ -152,13 +155,16 @@ type UnknownResource struct {
 // ModulePath is the chain of module call names from the root
 // configuration down to the resource — the same value the parser
 // records on Resource.ModulePath. Root-level resources have a
-// nil/empty ModulePath. The field is preserved through to the JSON
-// output (as `module_path`) precisely because it is what
-// distinguishes two resources that LoadRecursive instantiated from
-// the same module source at different call sites: their File and
-// Line are identical (they both point at the shared module's source
-// file), so without ModulePath the dedup map would silently collapse
-// them into a single row and the reporter would under-report.
+// nil/empty ModulePath, and the JSON tag is `omitempty`, so
+// `module_path` is omitted from the JSON object for root-level
+// resources rather than emitted as `null` or `[]`. The field is
+// preserved through to the JSON output (as `module_path`) precisely
+// because it is what distinguishes two resources that LoadRecursive
+// instantiated from the same module source at different call sites:
+// their File and Line are identical (they both point at the shared
+// module's source file), so without ModulePath the dedup map would
+// silently collapse them into a single row and the reporter would
+// under-report.
 //
 // Attribute is the bare attribute name from the catalog's `when:`
 // clause; not prefixed with the resource type/name.
@@ -180,7 +186,7 @@ type UnknownResource struct {
 type UnresolvedConditional struct {
 	ResourceType string   `json:"resource_type"`
 	ResourceName string   `json:"resource_name"`
-	ModulePath   []string `json:"module_path"`
+	ModulePath   []string `json:"module_path,omitempty"`
 	Attribute    string   `json:"attribute"`
 	Reason       string   `json:"reason"`
 	File         string   `json:"file"`
@@ -691,12 +697,12 @@ func sortedUnresolved(set map[unresolvedRecordKey]unresolvedRecordValue) []Unres
 		if out[i].ResourceName != out[j].ResourceName {
 			return out[i].ResourceName < out[j].ResourceName
 		}
-		// Final tiebreaker: walk module-path segments lexicographically.
-		// strings.Join here is only used as a sort key and never as a
-		// dedup key, so the encodeModulePath separator does not need to
-		// be reused — the empty-string separator is fine because we
-		// never compare across paths of unequal length: a length tier
-		// is folded in via the segment-by-segment comparison below.
+		// Final tiebreaker: compare module paths segment-by-segment
+		// lexicographically, with a length-based tiebreaker so shorter
+		// paths sort before any path that extends them
+		// ([] < [a] < [a, b] < [b]). This ordering is pinned by
+		// TestResolveUnresolvedModulePathSortOrder. See moduleLess for
+		// the implementation.
 		return moduleLess(out[i].ModulePath, out[j].ModulePath)
 	})
 	return out
