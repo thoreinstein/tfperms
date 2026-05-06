@@ -244,6 +244,7 @@ type IAMBindingEntry struct {
 	ParentResource        string        `yaml:"parent_resource"`
 	Verification          Verification  `yaml:"verification"`
 	Permissions           PermissionSet `yaml:"permissions"`
+	Conditionals          []Conditional `yaml:"conditionals,omitempty"`
 	TestedAgainstProvider string        `yaml:"tested_against_provider"`
 	Position              Position      `yaml:"-"`
 }
