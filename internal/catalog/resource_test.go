@@ -118,10 +118,11 @@ func TestCatalogResources(t *testing.T) {
 //
 // All path-bearing strings in the JSON shape are relativised to
 // <SCENARIO_DIR> so goldens stay byte-identical across machines and OS
-// path separators. The current Resolution shape (string slices only)
-// has no path-bearing fields, so this is a no-op today; the helpers
-// stay in place for the Epic 5 expansion that will add file:line
-// context to Unknowns / Unresolved.
+// path separators. The resolver's UnknownResource and
+// UnresolvedConditional structs both carry a File field populated from
+// parser.Resource.File — which LoadRecursive sets to an absolute path,
+// so without relativisation the goldens would embed each developer's
+// home directory and break on every machine.
 func runResourceFixture(t *testing.T, cat *catalog.Catalog, service, resourceType string) {
 	t.Helper()
 
@@ -147,6 +148,7 @@ func runResourceFixture(t *testing.T, cat *catalog.Catalog, service, resourceTyp
 	}
 
 	res := resolver.Resolve(resources, cat)
+	relativizeResultPaths(&res, absDir)
 
 	got, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
@@ -177,6 +179,49 @@ func runResourceFixture(t *testing.T, cat *catalog.Catalog, service, resourceTyp
 			scenarioDir, string(want), string(got),
 		)
 	}
+}
+
+// relativizeResultPaths rewrites every File field on the Result's
+// diagnostic slices so the path is relative to absDir and uses forward
+// slashes regardless of the host OS. The catalog regression goldens
+// (internal/catalog/testdata/<service>/<type>/expected.json) are
+// committed to the repo and must be byte-identical across developer
+// machines; without this step a Linux CI box and a macOS laptop would
+// produce different absolute paths for the same fixture.
+//
+// Forward-slash normalisation handles the Windows case: filepath.Rel
+// emits backslashes on Windows but the goldens were generated on a
+// POSIX host, so we always emit forward slashes via filepath.ToSlash.
+//
+// A path that does not lie under absDir is left unchanged; that should
+// never happen for fixtures (LoadRecursive descends from absDir) but
+// emitting the absolute path verbatim is a louder failure than a
+// silent rewrite if the parser ever surprises us.
+func relativizeResultPaths(res *resolver.Result, absDir string) {
+	for i := range res.Unknowns {
+		res.Unknowns[i].File = relativiseFile(res.Unknowns[i].File, absDir)
+	}
+	for i := range res.Unresolved {
+		res.Unresolved[i].File = relativiseFile(res.Unresolved[i].File, absDir)
+	}
+}
+
+// relativiseFile returns file as a forward-slashed path relative to
+// absDir, or file unchanged if filepath.Rel fails or the result tries
+// to escape absDir (".." prefix). The escape check matches the
+// "should never happen" branch in relativizeResultPaths' doc.
+func relativiseFile(file, absDir string) string {
+	if file == "" {
+		return file
+	}
+	rel, err := filepath.Rel(absDir, file)
+	if err != nil {
+		return file
+	}
+	if strings.HasPrefix(rel, "..") {
+		return file
+	}
+	return filepath.ToSlash(rel)
 }
 
 // serviceName derives the testdata service-directory name from a

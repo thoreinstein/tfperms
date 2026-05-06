@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.targetPools.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.targetPools.create",
     "compute.targetPools.delete",
+    "compute.targetPools.update"
+  ],
+  "total_apply_perms": [
+    "compute.targetPools.create",
+    "compute.targetPools.delete",
+    "compute.targetPools.get",
     "compute.targetPools.update"
   ],
   "unknowns": [],

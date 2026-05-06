@@ -1,10 +1,18 @@
 {
-  "plan": [
+  "plan_perms": [
     "cloudfunctions.functions.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "cloudfunctions.functions.create",
     "cloudfunctions.functions.delete",
+    "cloudfunctions.functions.update",
+    "iam.serviceAccounts.actAs",
+    "storage.objects.get"
+  ],
+  "total_apply_perms": [
+    "cloudfunctions.functions.create",
+    "cloudfunctions.functions.delete",
+    "cloudfunctions.functions.get",
     "cloudfunctions.functions.update",
     "iam.serviceAccounts.actAs",
     "storage.objects.get"

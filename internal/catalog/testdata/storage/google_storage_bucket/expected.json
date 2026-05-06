@@ -1,11 +1,19 @@
 {
-  "plan": [
+  "plan_perms": [
     "storage.buckets.get",
     "storage.buckets.getIamPolicy"
   ],
-  "apply": [
+  "apply_only_perms": [
     "storage.buckets.create",
     "storage.buckets.delete",
+    "storage.buckets.setIamPolicy",
+    "storage.buckets.update"
+  ],
+  "total_apply_perms": [
+    "storage.buckets.create",
+    "storage.buckets.delete",
+    "storage.buckets.get",
+    "storage.buckets.getIamPolicy",
     "storage.buckets.setIamPolicy",
     "storage.buckets.update"
   ],

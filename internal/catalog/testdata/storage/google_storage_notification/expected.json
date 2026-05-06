@@ -1,8 +1,9 @@
 {
-  "plan": [
+  "plan_perms": [
     "storage.objects.list"
   ],
-  "apply": [
+  "apply_only_perms": [],
+  "total_apply_perms": [
     "storage.objects.list"
   ],
   "unknowns": [],

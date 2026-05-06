@@ -1,11 +1,18 @@
 {
-  "plan": [
+  "plan_perms": [
     "run.services.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "iam.serviceAccounts.actAs",
     "run.services.create",
     "run.services.delete",
+    "run.services.update"
+  ],
+  "total_apply_perms": [
+    "iam.serviceAccounts.actAs",
+    "run.services.create",
+    "run.services.delete",
+    "run.services.get",
     "run.services.update"
   ],
   "unknowns": [],

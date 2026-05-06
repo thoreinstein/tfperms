@@ -1,10 +1,15 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.routes.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.routes.create",
     "compute.routes.delete"
+  ],
+  "total_apply_perms": [
+    "compute.routes.create",
+    "compute.routes.delete",
+    "compute.routes.get"
   ],
   "unknowns": [],
   "unresolved": []

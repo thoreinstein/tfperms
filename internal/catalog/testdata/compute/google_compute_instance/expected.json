@@ -1,12 +1,24 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.instances.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.disks.create",
     "compute.disks.delete",
     "compute.instances.create",
     "compute.instances.delete",
+    "compute.instances.setMetadata",
+    "compute.instances.setTags",
+    "compute.instances.update",
+    "compute.subnetworks.use",
+    "iam.serviceAccounts.actAs"
+  ],
+  "total_apply_perms": [
+    "compute.disks.create",
+    "compute.disks.delete",
+    "compute.instances.create",
+    "compute.instances.delete",
+    "compute.instances.get",
     "compute.instances.setMetadata",
     "compute.instances.setTags",
     "compute.instances.update",

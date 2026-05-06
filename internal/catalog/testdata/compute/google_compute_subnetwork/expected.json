@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.subnetworks.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.subnetworks.create",
     "compute.subnetworks.delete",
+    "compute.subnetworks.update"
+  ],
+  "total_apply_perms": [
+    "compute.subnetworks.create",
+    "compute.subnetworks.delete",
+    "compute.subnetworks.get",
     "compute.subnetworks.update"
   ],
   "unknowns": [],

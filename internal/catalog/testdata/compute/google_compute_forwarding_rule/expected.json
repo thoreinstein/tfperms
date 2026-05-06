@@ -1,11 +1,18 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.forwardingRules.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.addresses.use",
     "compute.forwardingRules.create",
     "compute.forwardingRules.delete",
+    "compute.forwardingRules.update"
+  ],
+  "total_apply_perms": [
+    "compute.addresses.use",
+    "compute.forwardingRules.create",
+    "compute.forwardingRules.delete",
+    "compute.forwardingRules.get",
     "compute.forwardingRules.update"
   ],
   "unknowns": [],

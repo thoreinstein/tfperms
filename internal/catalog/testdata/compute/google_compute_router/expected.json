@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.routers.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.routers.create",
     "compute.routers.delete",
+    "compute.routers.update"
+  ],
+  "total_apply_perms": [
+    "compute.routers.create",
+    "compute.routers.delete",
+    "compute.routers.get",
     "compute.routers.update"
   ],
   "unknowns": [],

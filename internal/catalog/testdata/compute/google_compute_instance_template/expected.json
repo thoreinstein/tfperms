@@ -1,10 +1,17 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.instanceTemplates.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.instanceTemplates.create",
     "compute.instanceTemplates.delete",
+    "compute.subnetworks.use",
+    "iam.serviceAccounts.actAs"
+  ],
+  "total_apply_perms": [
+    "compute.instanceTemplates.create",
+    "compute.instanceTemplates.delete",
+    "compute.instanceTemplates.get",
     "compute.subnetworks.use",
     "iam.serviceAccounts.actAs"
   ],

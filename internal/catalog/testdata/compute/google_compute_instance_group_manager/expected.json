@@ -1,10 +1,18 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.instanceGroupManagers.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.instanceGroupManagers.create",
     "compute.instanceGroupManagers.delete",
+    "compute.instanceGroupManagers.update",
+    "compute.instanceTemplates.useReadOnly",
+    "iam.serviceAccounts.actAs"
+  ],
+  "total_apply_perms": [
+    "compute.instanceGroupManagers.create",
+    "compute.instanceGroupManagers.delete",
+    "compute.instanceGroupManagers.get",
     "compute.instanceGroupManagers.update",
     "compute.instanceTemplates.useReadOnly",
     "iam.serviceAccounts.actAs"
