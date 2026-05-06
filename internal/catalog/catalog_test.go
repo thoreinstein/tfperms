@@ -73,6 +73,12 @@ iam_bindings:
         - storage.buckets.setIamPolicy
       delete:
         - storage.buckets.setIamPolicy
+    conditionals:
+      - when:
+          role: roles/owner
+        permissions:
+          plan:
+            - extra.permission
 `
 
 	var raw struct {
@@ -138,6 +144,17 @@ iam_bindings:
 	}
 	if len(binding.Permissions.Create) != 1 || binding.Permissions.Create[0] != "storage.buckets.setIamPolicy" {
 		t.Errorf("iam binding create = %v", binding.Permissions.Create)
+	}
+	if len(binding.Conditionals) != 1 {
+		t.Errorf("iam binding conditionals len = %d, want 1", len(binding.Conditionals))
+	} else {
+		cond := binding.Conditionals[0]
+		if got, want := cond.When["role"], "roles/owner"; got != want {
+			t.Errorf("iam binding conditional role = %v, want %v", got, want)
+		}
+		if len(cond.Permissions.Plan) != 1 || cond.Permissions.Plan[0] != "extra.permission" {
+			t.Errorf("iam binding conditional plan = %v", cond.Permissions.Plan)
+		}
 	}
 
 	ds, ok := raw.DataSources["google_storage_bucket"]

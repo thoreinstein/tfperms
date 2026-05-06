@@ -232,6 +232,12 @@ func mergeFile(cat *Catalog, firstSeen map[string]Position, file string, data []
 		}
 		entry.Type = typ
 		entry.Position = pos
+		condLines := conditionalLines(&node)
+		for i := range entry.Conditionals {
+			if i < len(condLines) {
+				entry.Conditionals[i].Position = Position{File: file, Line: condLines[i]}
+			}
+		}
 		cat.IAMBindings[typ] = entry
 	}
 

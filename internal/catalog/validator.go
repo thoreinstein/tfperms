@@ -211,6 +211,12 @@ func validateIAMBindingEntry(e *IAMBindingEntry, cat *Catalog) error {
 			ErrCatalog, loc, e.ParentResource, known,
 		)
 	}
+	for i, c := range e.Conditionals {
+		condLoc := fmt.Sprintf("%s: iam_bindings/%s/conditionals[%d]", c.Position, e.Type, i)
+		if err := validateConditional(c, condLoc); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
