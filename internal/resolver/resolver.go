@@ -41,9 +41,10 @@
 //     present in the When clause but did not resolve to a literal in
 //     the parser (cty.NilVal) AND no other predicate definitively
 //     fails, the resolver emits an UnresolvedConditional carrying the
-//     resource Address (Terraform-ish, with module path), the gating
-//     Attribute name, and the source File:Line so the reporter can
-//     quote the offending block.
+//     resource Type/Name, the gating Attribute name, the parser's
+//     Reason classification (function_call, data_source,
+//     missing_variable, other), and the source File:Line so the
+//     reporter can quote the offending block.
 //   - Unknown resource detection: types that match neither Resources,
 //     DataSources, nor IAMBindings surface as UnknownResource entries
 //     carrying the Terraform Type and the source File:Line.
@@ -62,7 +63,6 @@ package resolver
 import (
 	"math/big"
 	"sort"
-	"strings"
 
 	"github.com/zclconf/go-cty/cty"
 
@@ -93,8 +93,9 @@ import (
 //     offending block.
 //   - Unresolved: conditional gating attributes that could not be
 //     statically evaluated against a parsed resource. Each entry
-//     carries the resource Address (Terraform-ish, including module
-//     path), the unresolved Attribute name, and the source File:Line.
+//     carries the resource Type/Name, the unresolved Attribute name,
+//     a stable Reason classification (function_call, data_source,
+//     missing_variable, other), and the source File:Line.
 //
 // Field invariants:
 //
@@ -107,8 +108,8 @@ import (
 //     ascending and deduplicated. Order is a contract: the reporter
 //     pins flat-list output to the resolver's order, and the
 //     per-resource catalog tests compare byte-by-byte against goldens.
-//   - Unknowns and Unresolved are deterministically sorted by
-//     (File, Line, Type/Address, Attribute) so multiple unknowns or
+//   - Unknowns are sorted by (File, Line, Type) and Unresolved by
+//     (File, Line, ResourceType, Attribute) so multiple unknowns or
 //     unresolveds in the same configuration produce stable golden
 //     output.
 type Result struct {
@@ -140,21 +141,40 @@ type UnknownResource struct {
 // incomplete because a `var.X` or function call hid an attribute the
 // catalog's `when:` clause depends on.
 //
-// Address is the Terraform-ish identifier of the resource — the module
-// path (if any), a `data.` segment for `data` blocks, and the
-// `<type>.<name>` pair. See resourceAddress for the exact format.
+// ResourceType / ResourceName are the Terraform `<type>` and `<name>`
+// labels of the offending block (e.g. `google_storage_bucket` /
+// `primary`). The pair plus File:Line locates the block uniquely
+// within a single configuration. Note that this representation drops
+// the module-path prefix that an earlier Address-based shape carried;
+// blocks in different modules but with the same type/name and file
+// position would collide, but the parser's File field already holds
+// the module's absolute path so the actual collision surface is the
+// rare case of two modules sharing both source path and (Type, Name).
 //
 // Attribute is the bare attribute name from the catalog's `when:`
-// clause; not prefixed with the address.
+// clause; not prefixed with the resource type/name.
+//
+// Reason is the classification string from the parser's AttrReasons
+// map for the offending attribute — one of parser.ReasonFunctionCall,
+// parser.ReasonDataSource, parser.ReasonMissingVariable, or
+// parser.ReasonOther. It tells the user *why* the attribute was
+// unresolved, so a missing variable (user-fixable by adding a default)
+// is distinguishable from a function call (catalog-side issue) at a
+// glance. When the parser did not record a reason for the attribute
+// (e.g. the attribute is absent from the resource entirely rather
+// than unresolved), Reason falls back to parser.ReasonOther so the
+// JSON shape is always populated.
 //
 // File and Line locate the resource block in the source. As with
 // UnknownResource, this is whatever the parser recorded, so the catalog
 // regression harness relativises it before comparing against goldens.
 type UnresolvedConditional struct {
-	Address   string `json:"address"`
-	Attribute string `json:"attribute"`
-	File      string `json:"file"`
-	Line      int    `json:"line"`
+	ResourceType string `json:"resource_type"`
+	ResourceName string `json:"resource_name"`
+	Attribute    string `json:"attribute"`
+	Reason       string `json:"reason"`
+	File         string `json:"file"`
+	Line         int    `json:"line"`
 }
 
 // Resolve combines the parsed resource set with the merged catalog and
@@ -174,7 +194,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 	plan := make(map[string]struct{})
 	apply := make(map[string]struct{})
 	unknowns := make(map[unknownKey]struct{})
-	unresolved := make(map[unresolvedRecordKey]struct{})
+	unresolved := make(map[unresolvedRecordKey]string)
 
 	for _, r := range resources {
 		switch r.Kind {
@@ -197,12 +217,14 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 						}
 					}
 					for _, attr := range missing {
-						unresolved[unresolvedRecordKey{
-							Address:   resourceAddress(r),
-							Attribute: attr,
-							File:      r.File,
-							Line:      r.Line,
-						}] = struct{}{}
+						key := unresolvedRecordKey{
+							ResourceType: r.Type,
+							ResourceName: r.Name,
+							Attribute:    attr,
+							File:         r.File,
+							Line:         r.Line,
+						}
+						unresolved[key] = unresolvedReasonFor(r, attr)
 					}
 				}
 				continue
@@ -225,12 +247,14 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 						}
 					}
 					for _, attr := range missing {
-						unresolved[unresolvedRecordKey{
-							Address:   resourceAddress(r),
-							Attribute: attr,
-							File:      r.File,
-							Line:      r.Line,
-						}] = struct{}{}
+						key := unresolvedRecordKey{
+							ResourceType: r.Type,
+							ResourceName: r.Name,
+							Attribute:    attr,
+							File:         r.File,
+							Line:         r.Line,
+						}
+						unresolved[key] = unresolvedReasonFor(r, attr)
 					}
 				}
 				continue
@@ -245,12 +269,14 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 						addAll(plan, cond.Permissions.Plan)
 					}
 					for _, attr := range missing {
-						unresolved[unresolvedRecordKey{
-							Address:   resourceAddress(r),
-							Attribute: attr,
-							File:      r.File,
-							Line:      r.Line,
-						}] = struct{}{}
+						key := unresolvedRecordKey{
+							ResourceType: r.Type,
+							ResourceName: r.Name,
+							Attribute:    attr,
+							File:         r.File,
+							Line:         r.Line,
+						}
+						unresolved[key] = unresolvedReasonFor(r, attr)
 					}
 				}
 				continue
@@ -288,16 +314,20 @@ type unknownKey struct {
 }
 
 // unresolvedRecordKey is the dedup key for entries surfaced into
-// Result.Unresolved. Address already encodes module path and Kind, so
-// two block instances at the same address can only differ by source
-// location — including File and Line in the key avoids collapsing
-// the same logical block reported from two parser passes (defensive;
-// the current parser does not produce duplicates).
+// Result.Unresolved. (ResourceType, ResourceName, Attribute, File,
+// Line) is the minimum tuple that distinguishes one unresolved entry
+// from another within a configuration. Reason is intentionally NOT
+// part of the key — the parser is deterministic, so the same
+// (Type, Name, Attribute, File, Line) tuple should not appear with
+// two different reasons in a single resolve pass; if it ever did,
+// the second insertion would silently overwrite the first which is
+// what we want (consistent classification).
 type unresolvedRecordKey struct {
-	Address   string
-	Attribute string
-	File      string
-	Line      int
+	ResourceType string
+	ResourceName string
+	Attribute    string
+	File         string
+	Line         int
 }
 
 // lookupResource returns the catalog entry for a `resource` block type,
@@ -329,45 +359,6 @@ func lookupIAMBinding(cat *catalog.Catalog, typ string) *catalog.IAMBindingEntry
 		return nil
 	}
 	return cat.IAMBindings[typ]
-}
-
-// resourceAddress formats the Terraform-ish identifier of a resource
-// for use as the Address field on UnresolvedConditional.
-//
-// The shape is module path (if any, dotted in front), then a `data.`
-// segment for `data` blocks, then `<type>.<name>`. Two blocks that
-// differ only in their instantiation context never collapse into the
-// same address:
-//
-//   - ModulePath components (when LoadRecursive populated them) are
-//     dotted in front, preserving outer-to-inner traversal order. A
-//     module reused at two call sites therefore produces two distinct
-//     entries even when the inner resource has the same type/name.
-//   - `data` blocks carry an explicit `data.` segment after the module
-//     path, so a `resource "google_storage_bucket" "x"` and a
-//     `data "google_storage_bucket" "x"` in the same scope do not
-//     collapse.
-//
-// Examples:
-//
-//   - Root resource:  "google_storage_bucket.primary"
-//   - Root data:      "data.google_storage_bucket.primary"
-//   - Reused module:  "foo.google_storage_bucket.primary"
-//   - Nested module:  "foo.bar.google_storage_bucket.primary"
-//   - Module + data:  "foo.data.google_storage_bucket.primary"
-func resourceAddress(r parser.Resource) string {
-	var b strings.Builder
-	for _, seg := range r.ModulePath {
-		b.WriteString(seg)
-		b.WriteByte('.')
-	}
-	if r.Kind == "data" {
-		b.WriteString("data.")
-	}
-	b.WriteString(r.Type)
-	b.WriteByte('.')
-	b.WriteString(r.Name)
-	return b.String()
 }
 
 // matchesConditional evaluates a Conditional / DataSourceConditional
@@ -571,19 +562,25 @@ func sortedUnknowns(set map[unknownKey]struct{}) []UnknownResource {
 }
 
 // sortedUnresolved returns the unresolved-conditional set as a sorted,
-// non-nil slice of UnresolvedConditional. Sort order is (File, Line,
-// Address, Attribute) so reporters can walk entries in source order
-// per file. Address is the secondary tiebreaker so root and module-
-// nested entries with the same source location (e.g. zero-valued File
-// in unit tests) stay sorted by Terraform address.
-func sortedUnresolved(set map[unresolvedRecordKey]struct{}) []UnresolvedConditional {
+// non-nil slice of UnresolvedConditional. Primary sort order is
+// (File, Line, ResourceType, Attribute) per the spec; ResourceName is
+// appended as a final tiebreaker so two unrelated entries that share
+// the first four fields (rare in production where File/Line
+// disambiguate, common in unit tests with zero-valued File/Line)
+// still produce a fully deterministic ordering. Without the
+// ResourceName tiebreaker sort.Slice is non-stable across the tied
+// rows and the goldens would flap.
+func sortedUnresolved(set map[unresolvedRecordKey]string) []UnresolvedConditional {
 	out := make([]UnresolvedConditional, 0, len(set))
-	for k := range set {
-		// unresolvedRecordKey and UnresolvedConditional carry the same
-		// field set — the internal type stays unexported to keep
-		// map-key usage from leaking into the API; convert at the
-		// boundary.
-		out = append(out, UnresolvedConditional(k))
+	for k, reason := range set {
+		out = append(out, UnresolvedConditional{
+			ResourceType: k.ResourceType,
+			ResourceName: k.ResourceName,
+			Attribute:    k.Attribute,
+			Reason:       reason,
+			File:         k.File,
+			Line:         k.Line,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -592,10 +589,27 @@ func sortedUnresolved(set map[unresolvedRecordKey]struct{}) []UnresolvedConditio
 		if out[i].Line != out[j].Line {
 			return out[i].Line < out[j].Line
 		}
-		if out[i].Address != out[j].Address {
-			return out[i].Address < out[j].Address
+		if out[i].ResourceType != out[j].ResourceType {
+			return out[i].ResourceType < out[j].ResourceType
 		}
-		return out[i].Attribute < out[j].Attribute
+		if out[i].Attribute != out[j].Attribute {
+			return out[i].Attribute < out[j].Attribute
+		}
+		return out[i].ResourceName < out[j].ResourceName
 	})
 	return out
+}
+
+// unresolvedReasonFor returns the parser's classification reason for
+// attr on r, falling back to parser.ReasonOther when the parser did
+// not record a reason — which only happens when the attribute is
+// absent from the resource entirely (the catalog's when: predicate
+// names an attribute the user never wrote). The fallback keeps the
+// Reason JSON field always populated so downstream consumers do not
+// have to handle an empty-string sentinel.
+func unresolvedReasonFor(r parser.Resource, attr string) string {
+	if reason, ok := r.AttrReasons[attr]; ok {
+		return reason
+	}
+	return parser.ReasonOther
 }
