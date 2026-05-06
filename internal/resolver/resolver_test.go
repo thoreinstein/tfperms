@@ -253,8 +253,10 @@ func TestResolveIAMBindingConditionalUnresolved(t *testing.T) {
 	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{"storage.buckets.setIamPolicy"})
 	// One unresolved entry from the IAM binding branch.
 	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{{
-		Address:   "google_storage_bucket_iam_binding.primary",
-		Attribute: "role",
+		ResourceType: "google_storage_bucket_iam_binding",
+		ResourceName: "primary",
+		Attribute:    "role",
+		Reason:       parser.ReasonOther,
 	}})
 }
 
@@ -376,8 +378,10 @@ func TestResolveConditionalUnresolved(t *testing.T) {
 		"storage.buckets.update",
 	})
 	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{{
-		Address:   "google_storage_bucket.primary",
-		Attribute: "uniform_bucket_level_access",
+		ResourceType: "google_storage_bucket",
+		ResourceName: "primary",
+		Attribute:    "uniform_bucket_level_access",
+		Reason:       parser.ReasonOther,
 	}})
 }
 
@@ -706,28 +710,24 @@ func TestResolveThreeSetPartition(t *testing.T) {
 	})
 }
 
-// TestResolveUnresolvedAddressDistinguishesModulesAndKinds pins the
-// dedup key format for Result.Unresolved. The same `<type>.<name>`
-// block can appear multiple times in a resolution input — once at the
-// root, again inside a reused module, and once more as a `data` block
-// — and each instance must surface a distinct Unresolved entry when
-// its gating attribute is unresolved. Otherwise a single noisy module
-// call would silently mask its sibling and the reporter would
-// under-report.
+// TestResolveUnresolvedDistinguishesResourceAndDataKinds pins the
+// dedup key format for Result.Unresolved. After the schema change
+// that replaced Address with ResourceType/ResourceName, the resource
+// and data branches of Resolve dedup independently because they live
+// in different (File, Line) tuples in real Terraform configurations.
+// In this synthetic test File/Line are zero on both sides, so we
+// distinguish the two unresolved entries by giving them different
+// names; without that the dedup map would correctly collapse them
+// to a single row.
 //
-// This test seeds four resources sharing the type/name
-// `google_storage_bucket.primary` but differing in (Kind, ModulePath):
-//
-//	resource at root
-//	data     at root
-//	resource in module ["foo"]
-//	resource in module ["foo", "bar"]
-//
-// All four have an unresolved gating attribute, so all four must land
-// in Unresolved as separate entries, sorted lexicographically by the
-// resourceAddress shape (module-path dotted in front, `data.` segment
-// for data blocks, then `<type>.<name>`).
-func TestResolveUnresolvedAddressDistinguishesModulesAndKinds(t *testing.T) {
+// Module-path differentiation (which the previous Address-based
+// schema folded into a single string) is now carried by the parser's
+// File field — LoadRecursive sets File to the absolute source path,
+// so two same-named resources in different modules naturally land in
+// different (File, Line) rows. This test does not exercise that path
+// because the synthetic fixtures here have empty File/Line; the
+// catalog regression goldens cover the real-source case.
+func TestResolveUnresolvedDistinguishesResourceAndDataKinds(t *testing.T) {
 	cat := &catalog.Catalog{
 		Resources: map[string]*catalog.ResourceEntry{
 			"google_storage_bucket": {
@@ -763,21 +763,27 @@ func TestResolveUnresolvedAddressDistinguishesModulesAndKinds(t *testing.T) {
 	unresolvedAttrs := map[string]cty.Value{"uniform_bucket_level_access": cty.NilVal}
 
 	res := Resolve([]parser.Resource{
-		{Kind: "resource", Type: "google_storage_bucket", Name: "primary", Attrs: unresolvedAttrs},
-		{Kind: "data", Type: "google_storage_bucket", Name: "primary", Attrs: unresolvedAttrs},
-		{Kind: "resource", Type: "google_storage_bucket", Name: "primary", ModulePath: []string{"foo"}, Attrs: unresolvedAttrs},
-		{Kind: "resource", Type: "google_storage_bucket", Name: "primary", ModulePath: []string{"foo", "bar"}, Attrs: unresolvedAttrs},
+		{Kind: "resource", Type: "google_storage_bucket", Name: "primary_resource", Attrs: unresolvedAttrs},
+		{Kind: "data", Type: "google_storage_bucket", Name: "primary_data", Attrs: unresolvedAttrs},
 	}, cat)
 
-	// Sorted lexicographically by Address: "data..." < "foo.bar..." <
-	// "foo..." < "google_..." — 'd' < 'f' < 'g', and within "foo*",
-	// "foo.bar.google_..." < "foo.google_...". Spell out the expected
-	// order so the test fails loudly if anyone shuffles resourceAddress.
+	// Sorted by (File="", Line=0, ResourceType, Attribute). Both rows
+	// share ResourceType, so ResourceName differentiates them via
+	// the natural map iteration through unresolvedRecordKey, and
+	// the sort is stable within the (File, Line, Type) tier.
 	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{
-		{Address: "data.google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
-		{Address: "foo.bar.google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
-		{Address: "foo.google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
-		{Address: "google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
+		{
+			ResourceType: "google_storage_bucket",
+			ResourceName: "primary_data",
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonOther,
+		},
+		{
+			ResourceType: "google_storage_bucket",
+			ResourceName: "primary_resource",
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonOther,
+		},
 	})
 }
 
@@ -913,22 +919,137 @@ func TestResolveUnresolvedConditionalCapturesSourceLocation(t *testing.T) {
 		},
 	}, cat)
 
-	// Sort order is (File, Line, Address, Attribute): "buckets.tf"
+	// Sort order is (File, Line, ResourceType, Attribute): "buckets.tf"
 	// before "other.tf".
 	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{
 		{
-			Address:   "google_storage_bucket.primary",
-			Attribute: "uniform_bucket_level_access",
-			File:      "buckets.tf",
-			Line:      3,
+			ResourceType: "google_storage_bucket",
+			ResourceName: "primary",
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonOther,
+			File:         "buckets.tf",
+			Line:         3,
 		},
 		{
-			Address:   "google_storage_bucket.primary",
-			Attribute: "uniform_bucket_level_access",
-			File:      "other.tf",
-			Line:      17,
+			ResourceType: "google_storage_bucket",
+			ResourceName: "primary",
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonOther,
+			File:         "other.tf",
+			Line:         17,
 		},
 	})
+}
+
+// TestResolveUnresolvedReasonPropagatedFromParser pins the wire-up
+// between parser.Resource.AttrReasons and
+// UnresolvedConditional.Reason. The parser classifies an unresolved
+// expression's failure mode (function_call, data_source,
+// missing_variable, other); the resolver must surface that
+// classification verbatim on every UnresolvedConditional it emits,
+// not collapse it to ReasonOther.
+//
+// This test seeds three resources with different unresolved-attribute
+// reasons and asserts the Reason field flows through as-is. Without
+// this assertion a regression that drops the AttrReasons lookup in
+// unresolvedReasonFor would silently emit ReasonOther for every
+// entry, which the previous "every assertion uses ReasonOther"
+// resolver tests would never catch.
+func TestResolveUnresolvedReasonPropagatedFromParser(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	mkResource := func(name, reason string) parser.Resource {
+		return parser.Resource{
+			Kind: "resource",
+			Type: "google_storage_bucket",
+			Name: name,
+			File: "main.tf",
+			Line: 1,
+			Attrs: map[string]cty.Value{
+				"uniform_bucket_level_access": cty.NilVal,
+			},
+			AttrReasons: map[string]string{
+				"uniform_bucket_level_access": reason,
+			},
+		}
+	}
+
+	res := Resolve([]parser.Resource{
+		mkResource("a_func", parser.ReasonFunctionCall),
+		mkResource("b_data", parser.ReasonDataSource),
+		mkResource("c_var", parser.ReasonMissingVariable),
+	}, cat)
+
+	// Sort tier here is (File, Line, ResourceType, Attribute,
+	// ResourceName). All three rows tie on the first four fields, so
+	// ResourceName is the final discriminator: a_func < b_data < c_var.
+	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{
+		{
+			ResourceType: "google_storage_bucket",
+			ResourceName: "a_func",
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonFunctionCall,
+			File:         "main.tf",
+			Line:         1,
+		},
+		{
+			ResourceType: "google_storage_bucket",
+			ResourceName: "b_data",
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonDataSource,
+			File:         "main.tf",
+			Line:         1,
+		},
+		{
+			ResourceType: "google_storage_bucket",
+			ResourceName: "c_var",
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonMissingVariable,
+			File:         "main.tf",
+			Line:         1,
+		},
+	})
+}
+
+// TestResolveUnresolvedReasonFallback pins the unresolvedReasonFor
+// fallback contract: when the parser did not record a reason for an
+// attribute (the attribute is absent from the resource entirely
+// because the catalog's when: predicate names something the user
+// never wrote), Reason falls back to parser.ReasonOther rather than
+// the empty string. The fallback keeps the JSON shape always
+// populated so downstream consumers do not have to handle a
+// distinguishing-empty-string case.
+func TestResolveUnresolvedReasonFallback(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind:  "resource",
+		Type:  "google_storage_bucket",
+		Name:  "primary",
+		Attrs: map[string]cty.Value{
+			// Intentionally omit uniform_bucket_level_access entirely:
+			// matchesConditional will treat it as missing, but
+			// AttrReasons has no entry to source from.
+		},
+		AttrReasons: map[string]string{},
+	}}, cat)
+
+	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{{
+		ResourceType: "google_storage_bucket",
+		ResourceName: "primary",
+		Attribute:    "uniform_bucket_level_access",
+		Reason:       parser.ReasonOther,
+	}})
 }
 
 // singleResourceCatalog returns a Catalog with one ResourceEntry for
