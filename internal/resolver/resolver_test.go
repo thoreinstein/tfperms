@@ -70,6 +70,82 @@ func TestResolveConditionalFires(t *testing.T) {
 	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
+// TestResolveMultipleConditionals verifies that multiple conditionals on
+// a single resource are evaluated independently and ALL matching ones
+// contribute their permissions to the union.
+func TestResolveMultipleConditionals(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{
+		{
+			When: map[string]any{"uniform_bucket_level_access": true},
+			Permissions: catalog.PermissionSet{
+				Plan: []string{"storage.buckets.getIamPolicy"},
+			},
+		},
+		{
+			When: map[string]any{"versioning": true},
+			Permissions: catalog.PermissionSet{
+				Plan: []string{"storage.buckets.getVersioning"},
+			},
+		},
+	})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"uniform_bucket_level_access": cty.True,
+			"versioning":                  cty.True,
+		},
+	}}, cat)
+
+	// Base permissions + both conditionals' contributions.
+	wantPlan := []string{
+		"storage.buckets.get",
+		"storage.buckets.getIamPolicy",
+		"storage.buckets.getVersioning",
+	}
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, wantPlan)
+}
+
+// TestResolveIAMBindingConditional verifies that conditionals on IAM
+// binding entries are respected.
+func TestResolveIAMBindingConditional(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources: map[string]*catalog.ResourceEntry{
+			"google_storage_bucket": {Type: "google_storage_bucket"},
+		},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{
+			"google_storage_bucket_iam_binding": {
+				Type:           "google_storage_bucket_iam_binding",
+				ParentResource: "google_storage_bucket",
+				Permissions: catalog.PermissionSet{
+					Plan: []string{"storage.buckets.getIamPolicy"},
+				},
+				Conditionals: []catalog.Conditional{{
+					When: map[string]any{"role": "roles/owner"},
+					Permissions: catalog.PermissionSet{
+						Plan: []string{"extra.permission"},
+					},
+				}},
+			},
+		},
+	}
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket_iam_binding",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"role": cty.StringVal("roles/owner"),
+		},
+	}}, cat)
+
+	wantPlan := []string{"extra.permission", "storage.buckets.getIamPolicy"}
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, wantPlan)
+}
+
 // TestResolveConditionalDoesNotFire verifies that a resource whose
 // gating attribute is resolved but unequal to the predicate's expected
 // value does NOT receive the conditional's permissions, AND does NOT
