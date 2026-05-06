@@ -113,7 +113,7 @@ func TestCatalogResources(t *testing.T) {
 //     not a per-entry slice — the resolver is supposed to look up
 //     types itself, and exercising the production lookup path is more
 //     valuable than micro-testing a single entry.
-//  4. Marshal the Resolution as indented JSON and compare against (or
+//  4. Marshal the Result as indented JSON and compare against (or
 //     write) expected.json.
 //
 // All path-bearing strings in the JSON shape are relativised to
@@ -208,8 +208,9 @@ func relativizeResultPaths(res *resolver.Result, absDir string) {
 
 // relativiseFile returns file as a forward-slashed path relative to
 // absDir, or file unchanged if filepath.Rel fails or the result tries
-// to escape absDir (".." prefix). The escape check matches the
-// "should never happen" branch in relativizeResultPaths' doc.
+// to escape absDir (a literal ".." segment, not just a ".." prefix —
+// "..foo" is a valid child). The escape check matches the "should
+// never happen" branch in relativizeResultPaths' doc.
 func relativiseFile(file, absDir string) string {
 	if file == "" {
 		return file
@@ -218,7 +219,7 @@ func relativiseFile(file, absDir string) string {
 	if err != nil {
 		return file
 	}
-	if strings.HasPrefix(rel, "..") {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return file
 	}
 	return filepath.ToSlash(rel)
