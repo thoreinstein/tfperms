@@ -764,10 +764,12 @@ func TestResolveUnresolvedDistinguishesResourceAndDataKinds(t *testing.T) {
 		{Kind: "data", Type: "google_storage_bucket", Name: "primary_data", Attrs: unresolvedAttrs},
 	}, cat)
 
-	// Sorted by (File="", Line=0, ResourceType, Attribute). Both rows
-	// share ResourceType, so ResourceName differentiates them via
-	// the natural map iteration through unresolvedRecordKey, and
-	// the sort is stable within the (File, Line, Type) tier.
+	// sortedUnresolved sorts by
+	// (File, Line, ResourceType, Attribute, ResourceName, ModulePath).
+	// Both rows share File="", Line=0, ResourceType, and Attribute, so
+	// the deterministic ordering here comes from the ResourceName
+	// tiebreaker in the resolver's sort — not from Go's map iteration
+	// order, which is intentionally randomised.
 	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{
 		{
 			ResourceType: "google_storage_bucket",
