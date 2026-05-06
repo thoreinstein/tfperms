@@ -41,23 +41,18 @@
 //     present in the When clause but did not resolve to a literal in
 //     the parser (cty.NilVal) AND no other predicate definitively
 //     fails, the resolver emits an UnresolvedConditional carrying the
-//     resource Address (Terraform-ish, with module path) and the
-//     gating Attribute name. Source-location enrichment (File / Line)
-//     lands in a follow-up phase.
+//     resource Address (Terraform-ish, with module path), the gating
+//     Attribute name, and the source File:Line so the reporter can
+//     quote the offending block.
 //   - Unknown resource detection: types that match neither Resources,
 //     DataSources, nor IAMBindings surface as UnknownResource entries
-//     carrying the Terraform Type. Source-location enrichment lands
-//     in a follow-up phase.
+//     carrying the Terraform Type and the source File:Line.
 //
 // What this iteration does NOT yet handle (Epic 5 stories tracked
 // elsewhere):
 //
 //   - --include-delete / --exclude-delete flag plumbing — Delete is
 //     unconditionally included unless prevent_destroy fires.
-//   - Source-location (File / Line) enrichment on Unknowns and
-//     Unresolved entries. The struct shapes carry the fields so
-//     downstream consumers compile against the final API; the
-//     resolver does not yet populate them.
 //
 // When Epic 5's full feature set lands here, the per-resource catalog
 // goldens at internal/catalog/testdata/<service>/<type>/expected.json
@@ -133,12 +128,6 @@ type Result struct {
 // come from the parser's Resource.File / Resource.Line — for
 // LoadRecursive callers this is an absolute path; the catalog
 // regression harness relativises it before comparing to goldens.
-//
-// File and Line are part of the public API surface but are not
-// populated by the current resolver — Phase 3 of the Epic 5
-// implementation plan wires them up. Until then they marshal as the
-// JSON zero values ("" and 0) so consumers compile against the final
-// shape today.
 type UnknownResource struct {
 	Type string `json:"type"`
 	File string `json:"file"`
@@ -161,12 +150,6 @@ type UnknownResource struct {
 // File and Line locate the resource block in the source. As with
 // UnknownResource, this is whatever the parser recorded, so the catalog
 // regression harness relativises it before comparing against goldens.
-//
-// File and Line are part of the public API surface but are not
-// populated by the current resolver — Phase 3 of the Epic 5
-// implementation plan wires them up. Until then they marshal as the
-// JSON zero values ("" and 0) so consumers compile against the final
-// shape today.
 type UnresolvedConditional struct {
 	Address   string `json:"address"`
 	Attribute string `json:"attribute"`
@@ -217,6 +200,8 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 						unresolved[unresolvedRecordKey{
 							Address:   resourceAddress(r),
 							Attribute: attr,
+							File:      r.File,
+							Line:      r.Line,
 						}] = struct{}{}
 					}
 				}
@@ -231,7 +216,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 				}
 				continue
 			}
-			unknowns[unknownKey{Type: r.Type}] = struct{}{}
+			unknowns[unknownKey{Type: r.Type, File: r.File, Line: r.Line}] = struct{}{}
 		case "data":
 			if entry := lookupDataSource(cat, r.Type); entry != nil {
 				addAll(plan, entry.Permissions.Plan)
@@ -244,12 +229,14 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 						unresolved[unresolvedRecordKey{
 							Address:   resourceAddress(r),
 							Attribute: attr,
+							File:      r.File,
+							Line:      r.Line,
 						}] = struct{}{}
 					}
 				}
 				continue
 			}
-			unknowns[unknownKey{Type: r.Type}] = struct{}{}
+			unknowns[unknownKey{Type: r.Type, File: r.File, Line: r.Line}] = struct{}{}
 		}
 		// Unknown Kind (neither "resource" nor "data") is silently
 		// ignored. The parser's contract guarantees Kind is one of
