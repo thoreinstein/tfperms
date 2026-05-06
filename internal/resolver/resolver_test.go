@@ -108,8 +108,24 @@ func TestResolveMultipleConditionals(t *testing.T) {
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, wantPlan)
 }
 
-// TestResolveIAMBindingConditional verifies that conditionals on IAM
-// binding entries are respected.
+// TestResolveIAMBindingConditional verifies that a conditional on an
+// IAM binding entry whose `when:` predicate matches the resource's
+// resolved attribute fires and unions ALL four permission stages —
+// plan, create, update, delete — onto the IAM binding's base set. This
+// pins the conditional-application loop in Resolve's IAM binding branch
+// (resolver.go: the `for _, cond := range entry.Conditionals` block on
+// the IAM binding lookup), which mirrors the resource branch but goes
+// through cat.IAMBindings rather than cat.Resources. A regression that
+// dropped, say, the conditional Update union from the IAM binding branch
+// would silently leak setIamPolicy from total_apply_perms here.
+//
+// The fixture uses distinct permission strings on the base set
+// ("storage.buckets.*") and the conditional ("resourcemanager.projects.*")
+// so each side's contribution is observable in every result slice. The
+// three-set partition assertion (plan / apply-only / total-apply) is
+// the same shape used in TestResolveConditionalFires for resources,
+// which keeps the IAM binding test directly comparable with its
+// resource sibling.
 func TestResolveIAMBindingConditional(t *testing.T) {
 	cat := &catalog.Catalog{
 		Resources: map[string]*catalog.ResourceEntry{
@@ -121,12 +137,18 @@ func TestResolveIAMBindingConditional(t *testing.T) {
 				Type:           "google_storage_bucket_iam_binding",
 				ParentResource: "google_storage_bucket",
 				Permissions: catalog.PermissionSet{
-					Plan: []string{"storage.buckets.getIamPolicy"},
+					Plan:   []string{"storage.buckets.getIamPolicy"},
+					Create: []string{"storage.buckets.setIamPolicy"},
+					Update: []string{"storage.buckets.setIamPolicy"},
+					Delete: []string{"storage.buckets.setIamPolicy"},
 				},
 				Conditionals: []catalog.Conditional{{
 					When: map[string]any{"role": "roles/owner"},
 					Permissions: catalog.PermissionSet{
-						Plan: []string{"extra.permission"},
+						Plan:   []string{"resourcemanager.projects.getIamPolicy"},
+						Create: []string{"resourcemanager.projects.setIamPolicy"},
+						Update: []string{"resourcemanager.projects.setIamPolicy"},
+						Delete: []string{"resourcemanager.projects.setIamPolicy"},
 					},
 				}},
 			},
@@ -142,8 +164,154 @@ func TestResolveIAMBindingConditional(t *testing.T) {
 		},
 	}}, cat)
 
-	wantPlan := []string{"extra.permission", "storage.buckets.getIamPolicy"}
+	// Plan picks up both the base getIamPolicy and the conditional's
+	// projects.getIamPolicy.
+	wantPlan := []string{
+		"resourcemanager.projects.getIamPolicy",
+		"storage.buckets.getIamPolicy",
+	}
+	// ApplyOnly = (Create ∪ Update ∪ Delete) \ Plan. None of the
+	// setIamPolicy permissions appear in Plan, so both base and
+	// conditional setIamPolicy land here exactly once each (set
+	// semantics: Create/Update/Delete all share the same string per
+	// side).
+	wantApplyOnly := []string{
+		"resourcemanager.projects.setIamPolicy",
+		"storage.buckets.setIamPolicy",
+	}
+	// TotalApply = Plan ∪ ApplyOnly — every permission contributed by
+	// either side, exactly once.
+	wantTotalApply := []string{
+		"resourcemanager.projects.getIamPolicy",
+		"resourcemanager.projects.setIamPolicy",
+		"storage.buckets.getIamPolicy",
+		"storage.buckets.setIamPolicy",
+	}
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, wantPlan)
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, wantApplyOnly)
+	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, wantTotalApply)
+	assertUnresolvedEqual(t, res.Unresolved, nil)
+}
+
+// TestResolveIAMBindingConditionalUnresolved verifies that the IAM
+// binding branch of Resolve emits an UnresolvedConditional when a
+// conditional's gating attribute is unresolved (cty.NilVal — the
+// parser's marker for an expression like `var.X` it could not
+// statically evaluate). Pins resolver.go's
+//
+//	for _, attr := range missing {
+//	    unresolved[unresolvedRecordKey{...}] = struct{}{}
+//	}
+//
+// inside the IAM binding lookup branch. Without this assertion, a
+// regression that dropped the IAM binding `missing` walk would leave
+// users without a warning for the exact case the warning was added
+// for: a `var.role` whose default is unset.
+//
+// The conditional is NOT expected to fire (the gating attribute is
+// unresolved), so PlanPerms must equal the base set and the conditional
+// permissions must NOT leak into any apply slice. The Unresolved entry
+// must carry the IAM binding's resourceAddress and the gating
+// Attribute name.
+func TestResolveIAMBindingConditionalUnresolved(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources: map[string]*catalog.ResourceEntry{
+			"google_storage_bucket": {Type: "google_storage_bucket"},
+		},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{
+			"google_storage_bucket_iam_binding": {
+				Type:           "google_storage_bucket_iam_binding",
+				ParentResource: "google_storage_bucket",
+				Permissions: catalog.PermissionSet{
+					Plan:   []string{"storage.buckets.getIamPolicy"},
+					Create: []string{"storage.buckets.setIamPolicy"},
+				},
+				Conditionals: []catalog.Conditional{{
+					When: map[string]any{"role": "roles/owner"},
+					Permissions: catalog.PermissionSet{
+						// Distinctive permission so a leak would be
+						// obvious in the assertion diff.
+						Plan: []string{"resourcemanager.projects.getIamPolicy"},
+					},
+				}},
+			},
+		},
+	}
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket_iam_binding",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"role": cty.NilVal,
+		},
+	}}, cat)
+
+	// Base permissions only — conditional did not fire.
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.getIamPolicy"})
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{"storage.buckets.setIamPolicy"})
+	// One unresolved entry from the IAM binding branch.
+	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{{
+		Address:   "google_storage_bucket_iam_binding.primary",
+		Attribute: "role",
+	}})
+}
+
+// TestResolveIAMBindingPreventDestroySuppressesConditionalDelete is the
+// IAM binding sibling of
+// TestResolvePreventDestroySuppressesConditionalDelete. It pins that
+// `lifecycle { prevent_destroy = true }` suppresses Delete contributions
+// from a fired IAM binding conditional, not just from the base
+// PermissionSet. The IAM binding branch in Resolve has its own
+// `if !r.PreventDestroy` guard for the conditional Delete union; a
+// regression that dropped the guard there would leak setIamPolicy
+// (or any conditional-only Delete permission) into apply_only_perms
+// even when the user opted out of destroy.
+func TestResolveIAMBindingPreventDestroySuppressesConditionalDelete(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources: map[string]*catalog.ResourceEntry{
+			"google_storage_bucket": {Type: "google_storage_bucket"},
+		},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{
+			"google_storage_bucket_iam_binding": {
+				Type:           "google_storage_bucket_iam_binding",
+				ParentResource: "google_storage_bucket",
+				Permissions: catalog.PermissionSet{
+					Plan:   []string{"storage.buckets.getIamPolicy"},
+					Create: []string{"storage.buckets.setIamPolicy"},
+					Delete: []string{"storage.buckets.setIamPolicy"},
+				},
+				Conditionals: []catalog.Conditional{{
+					When: map[string]any{"role": "roles/owner"},
+					Permissions: catalog.PermissionSet{
+						// Distinctive Delete-only permission so a leak
+						// is unambiguous.
+						Delete: []string{"resourcemanager.projects.deleteIamPolicy"},
+					},
+				}},
+			},
+		},
+	}
+
+	res := Resolve([]parser.Resource{{
+		Kind:           "resource",
+		Type:           "google_storage_bucket_iam_binding",
+		Name:           "primary",
+		PreventDestroy: true,
+		Attrs: map[string]cty.Value{
+			"role": cty.StringVal("roles/owner"),
+		},
+	}}, cat)
+
+	// Plan: base getIamPolicy only — conditional contributes only Delete.
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.getIamPolicy"})
+	// Apply: base Create only. Both Delete sources — base
+	// storage.buckets.setIamPolicy and conditional
+	// resourcemanager.projects.deleteIamPolicy — must be suppressed.
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{"storage.buckets.setIamPolicy"})
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolveConditionalDoesNotFire verifies that a resource whose
