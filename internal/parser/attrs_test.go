@@ -52,18 +52,25 @@ func varLocalCtx() *hcl.EvalContext {
 
 // TestExtractAttrs covers the resolution contract for extractAttrs as a
 // single table. Each row supplies a single resource/data block fixture,
-// the *hcl.EvalContext to evaluate against, and the expected Attrs map.
+// the *hcl.EvalContext to evaluate against, the expected Attrs map, and
+// the expected Reasons map.
 //
 // Coverage maps onto Requirement 7 of the .5 spec (literals, var/local
 // resolution, unresolved references, function calls, interpolations,
 // cross-resource refs) plus the meta-arg / nested-block exclusions
-// required by Requirements 5, 6, and 8.
+// required by Requirements 5, 6, and 8. The wantReasons column also
+// pins the reason-classification contract: every cty.NilVal in
+// wantAttrs must have a corresponding entry in wantReasons drawn from
+// the {ReasonFunctionCall, ReasonDataSource, ReasonMissingVariable,
+// ReasonOther} vocabulary, and every resolved attribute must NOT
+// appear in wantReasons.
 func TestExtractAttrs(t *testing.T) {
 	cases := []struct {
-		name string
-		src  string
-		ctx  *hcl.EvalContext
-		want map[string]cty.Value
+		name        string
+		src         string
+		ctx         *hcl.EvalContext
+		want        map[string]cty.Value
+		wantReasons map[string]string
 	}{
 		// --- literal scalars (Requirement 7) ---
 		{
@@ -151,6 +158,9 @@ func TestExtractAttrs(t *testing.T) {
 			want: map[string]cty.Value{
 				"region": cty.NilVal,
 			},
+			wantReasons: map[string]string{
+				"region": ReasonMissingVariable,
+			},
 		},
 		{
 			name: "unresolved local reference yields NilVal but key present",
@@ -158,6 +168,13 @@ func TestExtractAttrs(t *testing.T) {
 			ctx:  emptyCtx(),
 			want: map[string]cty.Value{
 				"name": cty.NilVal,
+			},
+			// local.missing is intentionally classified as "other": the
+			// missing-variable category is reserved for var.* references
+			// the user can fix by providing a default. Locals are not
+			// user-supplied inputs.
+			wantReasons: map[string]string{
+				"name": ReasonOther,
 			},
 		},
 
@@ -169,6 +186,9 @@ func TestExtractAttrs(t *testing.T) {
 			want: map[string]cty.Value{
 				"name": cty.NilVal,
 			},
+			wantReasons: map[string]string{
+				"name": ReasonFunctionCall,
+			},
 		},
 		{
 			name: "interpolation referencing unknown var",
@@ -176,6 +196,9 @@ func TestExtractAttrs(t *testing.T) {
 			ctx:  emptyCtx(),
 			want: map[string]cty.Value{
 				"name": cty.NilVal,
+			},
+			wantReasons: map[string]string{
+				"name": ReasonMissingVariable,
 			},
 		},
 		{
@@ -185,6 +208,9 @@ func TestExtractAttrs(t *testing.T) {
 			want: map[string]cty.Value{
 				"bucket": cty.NilVal,
 			},
+			wantReasons: map[string]string{
+				"bucket": ReasonOther,
+			},
 		},
 		{
 			name: "data-source reference",
@@ -192,6 +218,44 @@ func TestExtractAttrs(t *testing.T) {
 			ctx:  emptyCtx(),
 			want: map[string]cty.Value{
 				"bucket": cty.NilVal,
+			},
+			wantReasons: map[string]string{
+				"bucket": ReasonDataSource,
+			},
+		},
+
+		// --- priority hierarchy: function call > data source > missing variable > other ---
+		{
+			name: "function call wraps data-source ref - function_call wins",
+			src:  `resource "x" "y" { name = upper(data.foo.bar.baz) }`,
+			ctx:  emptyCtx(),
+			want: map[string]cty.Value{
+				"name": cty.NilVal,
+			},
+			wantReasons: map[string]string{
+				"name": ReasonFunctionCall,
+			},
+		},
+		{
+			name: "data source mixed with missing var - data_source wins",
+			src:  `resource "x" "y" { name = "${var.missing}-${data.foo.bar.baz}" }`,
+			ctx:  emptyCtx(),
+			want: map[string]cty.Value{
+				"name": cty.NilVal,
+			},
+			wantReasons: map[string]string{
+				"name": ReasonDataSource,
+			},
+		},
+		{
+			name: "function wraps everything - function_call wins regardless",
+			src:  `resource "x" "y" { name = format("%s-%s", var.missing, data.foo.bar) }`,
+			ctx:  emptyCtx(),
+			want: map[string]cty.Value{
+				"name": cty.NilVal,
+			},
+			wantReasons: map[string]string{
+				"name": ReasonFunctionCall,
 			},
 		},
 
@@ -266,9 +330,12 @@ func TestExtractAttrs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			blk := parseBlock(t, tc.src)
-			got := extractAttrs(blk, tc.ctx)
+			got, gotReasons := extractAttrs(blk, tc.ctx)
 			if got == nil {
-				t.Fatalf("extractAttrs returned nil; must always be non-nil")
+				t.Fatalf("extractAttrs attrs returned nil; must always be non-nil")
+			}
+			if gotReasons == nil {
+				t.Fatalf("extractAttrs reasons returned nil; must always be non-nil")
 			}
 			if len(got) != len(tc.want) {
 				t.Errorf("extracted %d attrs (%v), want %d (%v)", len(got), keysOfMap(got), len(tc.want), keysOfMap(tc.want))
@@ -288,6 +355,36 @@ func TestExtractAttrs(t *testing.T) {
 					t.Errorf("unexpected extra key %q = %#v", k, got[k])
 				}
 			}
+			// Reasons assertions: every cty.NilVal in want must have a
+			// matching reason in wantReasons, and resolved attrs must
+			// NOT appear in gotReasons. Also flags any unexpected extra
+			// reason key.
+			if len(gotReasons) != len(tc.wantReasons) {
+				t.Errorf("extracted %d reasons (%v), want %d (%v)", len(gotReasons), keysOfReasonMap(gotReasons), len(tc.wantReasons), keysOfReasonMap(tc.wantReasons))
+			}
+			for k, want := range tc.wantReasons {
+				gotReason, ok := gotReasons[k]
+				if !ok {
+					t.Errorf("missing reason for key %q (got reason keys: %v)", k, keysOfReasonMap(gotReasons))
+					continue
+				}
+				if gotReason != want {
+					t.Errorf("reason %q = %q, want %q", k, gotReason, want)
+				}
+			}
+			for k, gotReason := range gotReasons {
+				if _, ok := tc.wantReasons[k]; !ok {
+					t.Errorf("unexpected extra reason key %q = %q", k, gotReason)
+				}
+				// Sanity: any reason entry must correspond to a
+				// cty.NilVal attribute. This catches a class of
+				// regression where a resolved attribute leaks a
+				// reason — which would silently inflate
+				// Result.Unresolved downstream.
+				if v, ok := got[k]; ok && v != cty.NilVal {
+					t.Errorf("reason %q recorded for resolved attribute (value=%#v)", k, v)
+				}
+			}
 		})
 	}
 }
@@ -303,12 +400,18 @@ func TestExtractAttrs_NonHCLSyntaxBody(t *testing.T) {
 		Labels: []string{"x", "y"},
 		Body:   hcl.EmptyBody(),
 	}
-	got := extractAttrs(blk, emptyCtx())
+	got, gotReasons := extractAttrs(blk, emptyCtx())
 	if got == nil {
-		t.Fatalf("extractAttrs returned nil; must always be non-nil")
+		t.Fatalf("extractAttrs attrs returned nil; must always be non-nil")
+	}
+	if gotReasons == nil {
+		t.Fatalf("extractAttrs reasons returned nil; must always be non-nil")
 	}
 	if len(got) != 0 {
-		t.Errorf("expected empty map for non-hclsyntax body, got %v", keysOfMap(got))
+		t.Errorf("expected empty attrs map for non-hclsyntax body, got %v", keysOfMap(got))
+	}
+	if len(gotReasons) != 0 {
+		t.Errorf("expected empty reasons map for non-hclsyntax body, got %v", keysOfReasonMap(gotReasons))
 	}
 }
 
@@ -317,6 +420,17 @@ func TestExtractAttrs_NonHCLSyntaxBody(t *testing.T) {
 // this helper rather than %v over the whole map because cty.Value's
 // GoString is verbose.
 func keysOfMap(m map[string]cty.Value) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// keysOfReasonMap is the reasons-map sibling of keysOfMap: returns the
+// keys of a map[string]string in an unspecified order for diagnostic
+// messages.
+func keysOfReasonMap(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
