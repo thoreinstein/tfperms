@@ -355,6 +355,63 @@ func TestParse_AttrsPopulated(t *testing.T) {
 	if len(r.Attrs) != 2 {
 		t.Errorf("Attrs has %d entries (%v), want 2", len(r.Attrs), r.Attrs)
 	}
+	// AttrReasons must be non-nil and empty: every attribute resolved.
+	// Defends the Parse → AttrReasons wire-up so a regression that
+	// drops the assignment surfaces here, not in resolver tests.
+	if r.AttrReasons == nil {
+		t.Fatalf("AttrReasons is nil; must always be non-nil")
+	}
+	if len(r.AttrReasons) != 0 {
+		t.Errorf("AttrReasons has %d entries (%v), want 0 (every attribute resolved)", len(r.AttrReasons), r.AttrReasons)
+	}
+}
+
+// TestParse_AttrReasonsPopulatedOnUnresolved is the negative sibling of
+// TestParse_AttrsPopulated: a resource with a `var.X` reference whose
+// variable has no default (so resolution fails) must surface
+// AttrReasons[X] = ReasonMissingVariable through the full Parse
+// pipeline. This pins the Parse → extractAttrs reasons-channel wire-up.
+// Without it, dropping the AttrReasons assignment in parse.go would let
+// every attrs_test.go row continue passing while production behaviour
+// silently regressed to "no reasons reported".
+func TestParse_AttrReasonsPopulatedOnUnresolved(t *testing.T) {
+	dir := t.TempDir()
+	src := "" +
+		// No default — var.region is unresolved.
+		"variable \"region\" {}\n" +
+		"resource \"google_storage_bucket\" \"b\" {\n" +
+		"  region = var.region\n" +
+		"  bucket = \"my-bucket\"\n" +
+		"}\n"
+	full := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, _, _, err := Parse([]string{full})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d resources, want 1: %+v", len(got), got)
+	}
+	r := got[0]
+
+	// region resolved to NilVal because var.region has no default.
+	if r.Attrs["region"] != cty.NilVal {
+		t.Errorf("Attrs[region] = %#v, want cty.NilVal", r.Attrs["region"])
+	}
+	if got, want := r.AttrReasons["region"], ReasonMissingVariable; got != want {
+		t.Errorf("AttrReasons[region] = %q, want %q", got, want)
+	}
+
+	// bucket resolved to a literal — must NOT have a reason entry.
+	if _, ok := r.AttrReasons["bucket"]; ok {
+		t.Errorf("AttrReasons[bucket] unexpectedly set to %q for resolved attribute", r.AttrReasons["bucket"])
+	}
+	if len(r.AttrReasons) != 1 {
+		t.Errorf("AttrReasons has %d entries (%v), want 1 (region only)", len(r.AttrReasons), r.AttrReasons)
+	}
 }
 
 // TestParse_DeterministicAcrossRuns runs the same multi-file fixture many

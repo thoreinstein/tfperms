@@ -50,6 +50,17 @@ import (
 //     missing/unresolved variables/locals). Callers that need richer
 //     resolution should treat cty.NilVal as "deferred / unknown"
 //     rather than "absent".
+//   - AttrReasons is always non-nil. For every Attrs entry whose value
+//     is cty.NilVal, AttrReasons holds a stable classification string
+//     describing *why* the expression could not be resolved. Resolved
+//     attributes have no AttrReasons entry — callers can therefore use
+//     the reasons map to enumerate the unresolved subset without
+//     re-checking each cty.Value. The classification strings are
+//     defined in attrs.go (ReasonFunctionCall, ReasonDataSource,
+//     ReasonMissingVariable, ReasonOther) and are exposed downstream
+//     via resolver.UnresolvedConditional.Reason; they are part of the
+//     public API and must not change without coordinating with the
+//     resolver's JSON contract.
 //   - DynamicBlocks holds the labels of `dynamic "<label>" { ... }`
 //     blocks declared *directly* on this resource's body, in source
 //     order. Empty slice (or nil; both are valid zero values, callers
@@ -79,6 +90,7 @@ type Resource struct {
 	File           string
 	Line           int
 	Attrs          map[string]cty.Value
+	AttrReasons    map[string]string
 	DynamicBlocks  []string
 	PreventDestroy bool
 	ModulePath     []string
@@ -333,13 +345,15 @@ func parseConfig(files []string, overrides map[string]cty.Value) ([]Resource, []
 		if !meta.keep {
 			continue
 		}
+		attrs, reasons := extractAttrs(blk, evalCtx)
 		resources = append(resources, Resource{
 			Kind:           blk.Type,
 			Type:           blk.Labels[0],
 			Name:           blk.Labels[1],
 			File:           blk.DefRange.Filename,
 			Line:           blk.DefRange.Start.Line,
-			Attrs:          extractAttrs(blk, evalCtx),
+			Attrs:          attrs,
+			AttrReasons:    reasons,
 			DynamicBlocks:  meta.dynamicLabels,
 			PreventDestroy: meta.preventDestroy,
 		})
@@ -370,7 +384,10 @@ func parseConfig(files []string, overrides map[string]cty.Value) ([]Resource, []
 // extractModule extracts a module block into a ModuleCall.
 func extractModule(blk *hcl.Block, evalCtx *hcl.EvalContext) (ModuleCall, hcl.Diagnostics) {
 	name := blk.Labels[0]
-	attrs := extractAttrs(blk, evalCtx)
+	// Module call sites do not surface AttrReasons — the reason map is
+	// only consumed by the resolver for resource/data conditional
+	// gating. Discard it here to keep ModuleCall.Args's contract narrow.
+	attrs, _ := extractAttrs(blk, evalCtx)
 
 	sourceVal := attrs["source"]
 	source := ""
