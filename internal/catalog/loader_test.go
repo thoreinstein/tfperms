@@ -250,6 +250,68 @@ data_sources:
 	}
 }
 
+// TestLoadAnnotatesIAMBindingConditionalPositions is the IAM binding
+// sibling of TestLoadAnnotatesConditionalPositions and
+// TestLoadAnnotatesDataSourceConditionalPositions. The
+// conditionalLines helper is shared across all three entry kinds, so
+// this test pins that the IAM binding loop in mergeFile actually calls
+// it — a regression that copy-pasted the IAM binding loop without the
+// `for i := range entry.Conditionals { ... entry.Conditionals[i].Position = ... }`
+// annotation block would surface as a Position with Line == 0 here,
+// which downstream validator diagnostics would render as
+// "<unknown>:0: iam_bindings/...: ..." (per Position.String).
+//
+// The conditional is intentionally placed several lines below the
+// surrounding entry header so the inequality assertion (cond line >
+// entry line) is meaningful: a regression that defaulted the
+// conditional Position to the entry's own line would falsely satisfy
+// "Line != 0" but fail the strictly-greater check.
+func TestLoadAnnotatesIAMBindingConditionalPositions(t *testing.T) {
+	mfs := fstest.MapFS{
+		"storage.yaml": &fstest.MapFile{Data: []byte(`
+resources:
+  google_storage_bucket:
+` + validProvenance + `    permissions:
+      plan: [storage.buckets.get]
+iam_bindings:
+  google_storage_bucket_iam_binding:
+    parent_resource: google_storage_bucket
+` + validProvenance + `    permissions:
+      plan: [storage.buckets.getIamPolicy]
+      create: [storage.buckets.setIamPolicy]
+      update: [storage.buckets.setIamPolicy]
+      delete: [storage.buckets.setIamPolicy]
+    conditionals:
+      - when:
+          role: roles/owner
+        permissions:
+          plan: [extra.permission]
+`)},
+	}
+	cat, err := LoadFS(mfs, ".")
+	if err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	binding := cat.IAMBindings["google_storage_bucket_iam_binding"]
+	if binding == nil {
+		t.Fatal("missing iam binding entry")
+	}
+	if len(binding.Conditionals) != 1 {
+		t.Fatalf("conditionals len = %d, want 1", len(binding.Conditionals))
+	}
+	condPos := binding.Conditionals[0].Position
+	if condPos.File != "storage.yaml" {
+		t.Errorf("iam binding conditional File = %q, want storage.yaml", condPos.File)
+	}
+	if condPos.Line == 0 {
+		t.Errorf("iam binding conditional Line = 0, want non-zero")
+	}
+	if condPos.Line <= binding.Position.Line {
+		t.Errorf("iam binding conditional Line %d not greater than entry Line %d — annotation likely wrong",
+			condPos.Line, binding.Position.Line)
+	}
+}
+
 // TestLoadProductionEmbed exercises the package-level Load() entry point
 // against the actual embedded catalog. It is a smoke test: as long as
 // the embedded files parse and pass validation we are happy. Full
