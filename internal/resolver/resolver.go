@@ -41,8 +41,9 @@
 //     present in the When clause but did not resolve to a literal in
 //     the parser (cty.NilVal) AND no other predicate definitively
 //     fails, the resolver emits an UnresolvedConditional carrying the
-//     resource Type/Name, the gating Attribute name, the parser's
-//     Reason classification (function_call, data_source,
+//     resource Type/Name, the ModulePath chain (so reused-module
+//     instantiations remain distinct), the gating Attribute name,
+//     the parser's Reason classification (function_call, data_source,
 //     missing_variable, other), and the source File:Line so the
 //     reporter can quote the offending block.
 //   - Unknown resource detection: types that match neither Resources,
@@ -63,6 +64,7 @@ package resolver
 import (
 	"math/big"
 	"sort"
+	"strings"
 
 	"github.com/zclconf/go-cty/cty"
 
@@ -93,9 +95,10 @@ import (
 //     offending block.
 //   - Unresolved: conditional gating attributes that could not be
 //     statically evaluated against a parsed resource. Each entry
-//     carries the resource Type/Name, the unresolved Attribute name,
-//     a stable Reason classification (function_call, data_source,
-//     missing_variable, other), and the source File:Line.
+//     carries the resource Type/Name, the ModulePath chain (so
+//     reused-module instantiations remain distinct), the unresolved
+//     Attribute name, a stable Reason classification (function_call,
+//     data_source, missing_variable, other), and the source File:Line.
 //
 // Field invariants:
 //
@@ -109,9 +112,10 @@ import (
 //     pins flat-list output to the resolver's order, and the
 //     per-resource catalog tests compare byte-by-byte against goldens.
 //   - Unknowns are sorted by (File, Line, Type) and Unresolved by
-//     (File, Line, ResourceType, Attribute) so multiple unknowns or
-//     unresolveds in the same configuration produce stable golden
-//     output.
+//     (File, Line, ResourceType, Attribute, ResourceName, ModulePath)
+//     so multiple unknowns or unresolveds in the same configuration
+//     produce stable golden output even when reused modules collapse
+//     all the leading tiers to ties.
 type Result struct {
 	PlanPerms       []string                `json:"plan_perms"`
 	ApplyOnlyPerms  []string                `json:"apply_only_perms"`
@@ -143,13 +147,18 @@ type UnknownResource struct {
 //
 // ResourceType / ResourceName are the Terraform `<type>` and `<name>`
 // labels of the offending block (e.g. `google_storage_bucket` /
-// `primary`). The pair plus File:Line locates the block uniquely
-// within a single configuration. Note that this representation drops
-// the module-path prefix that an earlier Address-based shape carried;
-// blocks in different modules but with the same type/name and file
-// position would collide, but the parser's File field already holds
-// the module's absolute path so the actual collision surface is the
-// rare case of two modules sharing both source path and (Type, Name).
+// `primary`).
+//
+// ModulePath is the chain of module call names from the root
+// configuration down to the resource — the same value the parser
+// records on Resource.ModulePath. Root-level resources have a
+// nil/empty ModulePath. The field is preserved through to the JSON
+// output (as `module_path`) precisely because it is what
+// distinguishes two resources that LoadRecursive instantiated from
+// the same module source at different call sites: their File and
+// Line are identical (they both point at the shared module's source
+// file), so without ModulePath the dedup map would silently collapse
+// them into a single row and the reporter would under-report.
 //
 // Attribute is the bare attribute name from the catalog's `when:`
 // clause; not prefixed with the resource type/name.
@@ -169,12 +178,13 @@ type UnknownResource struct {
 // UnknownResource, this is whatever the parser recorded, so the catalog
 // regression harness relativises it before comparing against goldens.
 type UnresolvedConditional struct {
-	ResourceType string `json:"resource_type"`
-	ResourceName string `json:"resource_name"`
-	Attribute    string `json:"attribute"`
-	Reason       string `json:"reason"`
-	File         string `json:"file"`
-	Line         int    `json:"line"`
+	ResourceType string   `json:"resource_type"`
+	ResourceName string   `json:"resource_name"`
+	ModulePath   []string `json:"module_path"`
+	Attribute    string   `json:"attribute"`
+	Reason       string   `json:"reason"`
+	File         string   `json:"file"`
+	Line         int      `json:"line"`
 }
 
 // Resolve combines the parsed resource set with the merged catalog and
@@ -194,7 +204,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 	plan := make(map[string]struct{})
 	apply := make(map[string]struct{})
 	unknowns := make(map[unknownKey]struct{})
-	unresolved := make(map[unresolvedRecordKey]string)
+	unresolved := make(map[unresolvedRecordKey]unresolvedRecordValue)
 
 	for _, r := range resources {
 		switch r.Kind {
@@ -218,13 +228,17 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 					}
 					for _, attr := range missing {
 						key := unresolvedRecordKey{
-							ResourceType: r.Type,
-							ResourceName: r.Name,
-							Attribute:    attr,
-							File:         r.File,
-							Line:         r.Line,
+							ResourceType:  r.Type,
+							ResourceName:  r.Name,
+							ModulePathKey: encodeModulePath(r.ModulePath),
+							Attribute:     attr,
+							File:          r.File,
+							Line:          r.Line,
 						}
-						unresolved[key] = unresolvedReasonFor(r, attr)
+						unresolved[key] = unresolvedRecordValue{
+							ModulePath: cloneModulePath(r.ModulePath),
+							Reason:     unresolvedReasonFor(r, attr),
+						}
 					}
 				}
 				continue
@@ -248,13 +262,17 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 					}
 					for _, attr := range missing {
 						key := unresolvedRecordKey{
-							ResourceType: r.Type,
-							ResourceName: r.Name,
-							Attribute:    attr,
-							File:         r.File,
-							Line:         r.Line,
+							ResourceType:  r.Type,
+							ResourceName:  r.Name,
+							ModulePathKey: encodeModulePath(r.ModulePath),
+							Attribute:     attr,
+							File:          r.File,
+							Line:          r.Line,
 						}
-						unresolved[key] = unresolvedReasonFor(r, attr)
+						unresolved[key] = unresolvedRecordValue{
+							ModulePath: cloneModulePath(r.ModulePath),
+							Reason:     unresolvedReasonFor(r, attr),
+						}
 					}
 				}
 				continue
@@ -270,13 +288,17 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 					}
 					for _, attr := range missing {
 						key := unresolvedRecordKey{
-							ResourceType: r.Type,
-							ResourceName: r.Name,
-							Attribute:    attr,
-							File:         r.File,
-							Line:         r.Line,
+							ResourceType:  r.Type,
+							ResourceName:  r.Name,
+							ModulePathKey: encodeModulePath(r.ModulePath),
+							Attribute:     attr,
+							File:          r.File,
+							Line:          r.Line,
 						}
-						unresolved[key] = unresolvedReasonFor(r, attr)
+						unresolved[key] = unresolvedRecordValue{
+							ModulePath: cloneModulePath(r.ModulePath),
+							Reason:     unresolvedReasonFor(r, attr),
+						}
 					}
 				}
 				continue
@@ -314,20 +336,86 @@ type unknownKey struct {
 }
 
 // unresolvedRecordKey is the dedup key for entries surfaced into
-// Result.Unresolved. (ResourceType, ResourceName, Attribute, File,
-// Line) is the minimum tuple that distinguishes one unresolved entry
-// from another within a configuration. Reason is intentionally NOT
-// part of the key — the parser is deterministic, so the same
-// (Type, Name, Attribute, File, Line) tuple should not appear with
-// two different reasons in a single resolve pass; if it ever did,
-// the second insertion would silently overwrite the first which is
-// what we want (consistent classification).
+// Result.Unresolved. (ResourceType, ResourceName, ModulePathKey,
+// Attribute, File, Line) is the minimum tuple that distinguishes one
+// unresolved entry from another within a configuration.
+//
+// ModulePathKey is required because LoadRecursive instantiates a
+// shared module template at every call site without rewriting File or
+// Line — those still point at the module's source file. Two call sites
+// (`module "x"` and `module "y"`, both pointing at the same `./mod`)
+// therefore produce two resources with identical (Type, Name, File,
+// Line) tuples that differ only in their ModulePath chain. Without a
+// module-path component in the key, the dedup map silently collapses
+// them and the resulting JSON under-reports — the regression the
+// review caught. The key is the encoded form of the parser's
+// Resource.ModulePath (NUL-joined; see encodeModulePath); the slice
+// itself is preserved on the unresolvedRecordValue side so the JSON
+// output keeps it as `module_path`.
+//
+// Reason is intentionally NOT part of the key — the parser is
+// deterministic, so the same (Type, Name, ModulePath, Attribute, File,
+// Line) tuple should not appear with two different reasons in a single
+// resolve pass; if it ever did, the second insertion would silently
+// overwrite the first which is what we want (consistent classification).
 type unresolvedRecordKey struct {
-	ResourceType string
-	ResourceName string
-	Attribute    string
-	File         string
-	Line         int
+	ResourceType  string
+	ResourceName  string
+	ModulePathKey string
+	Attribute     string
+	File          string
+	Line          int
+}
+
+// unresolvedRecordValue carries the per-row data that is not part of
+// the dedup key but still needs to flow through to the rendered
+// UnresolvedConditional. ModulePath is the parser's slice form (we
+// re-derive the JSON output from it rather than re-splitting
+// ModulePathKey, so the API surface stays a clean []string instead of
+// inheriting our internal NUL encoding). Reason is the per-attribute
+// classification from parser.AttrReasons, falling back to
+// parser.ReasonOther via unresolvedReasonFor.
+type unresolvedRecordValue struct {
+	ModulePath []string
+	Reason     string
+}
+
+// encodeModulePath joins a Resource.ModulePath chain into a string
+// that can serve as a map key. The separator is the ASCII NUL byte
+// (`\x00`) — it cannot legally appear in either an HCL identifier or
+// a filesystem path on any platform we care about, so two distinct
+// ModulePath slices encode to distinct strings without ambiguity.
+//
+// A nil/empty path encodes to "" so root-level resources (which have
+// no module chain) collide with each other in the dedup map but never
+// with a nested-module resource, which is the desired behaviour.
+//
+// We could in principle key the dedup map directly on a hashable
+// struct that embedded a fixed-size array, but ModulePath length is
+// unbounded; encoding to a string keeps the key type comparable while
+// preserving full discrimination.
+func encodeModulePath(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	return strings.Join(path, "\x00")
+}
+
+// cloneModulePath returns a defensive copy of path so the resolver's
+// output never shares a backing array with the parser's
+// Resource.ModulePath. Without the copy, a downstream caller mutating
+// UnresolvedConditional.ModulePath in place could corrupt the parser
+// slice that the cache in LoadRecursive shares across module call
+// sites. nil in, nil out — preserving the parser's "root resources
+// have no ModulePath" convention so test fixtures that omit the field
+// remain reflect.DeepEqual-equal to the resolver's output.
+func cloneModulePath(path []string) []string {
+	if len(path) == 0 {
+		return nil
+	}
+	out := make([]string, len(path))
+	copy(out, path)
+	return out
 }
 
 // lookupResource returns the catalog entry for a `resource` block type,
@@ -564,20 +652,25 @@ func sortedUnknowns(set map[unknownKey]struct{}) []UnknownResource {
 // sortedUnresolved returns the unresolved-conditional set as a sorted,
 // non-nil slice of UnresolvedConditional. Primary sort order is
 // (File, Line, ResourceType, Attribute) per the spec; ResourceName is
-// appended as a final tiebreaker so two unrelated entries that share
-// the first four fields (rare in production where File/Line
-// disambiguate, common in unit tests with zero-valued File/Line)
-// still produce a fully deterministic ordering. Without the
-// ResourceName tiebreaker sort.Slice is non-stable across the tied
-// rows and the goldens would flap.
-func sortedUnresolved(set map[unresolvedRecordKey]string) []UnresolvedConditional {
+// appended as a tiebreaker so two unrelated entries that share the
+// first four fields (rare in production where File/Line disambiguate,
+// common in unit tests with zero-valued File/Line) still produce a
+// fully deterministic ordering. ModulePath is the final tiebreaker
+// after ResourceName: two reused-module instantiations of the same
+// `<type>.<name>` resource land at identical (File, Line, Type,
+// Attribute, Name) tuples and only their module-path chain
+// distinguishes them, so the chain has to participate in the sort or
+// goldens flap across runs. Without the ResourceName / ModulePath
+// tiebreakers sort.Slice is non-stable across the tied rows.
+func sortedUnresolved(set map[unresolvedRecordKey]unresolvedRecordValue) []UnresolvedConditional {
 	out := make([]UnresolvedConditional, 0, len(set))
-	for k, reason := range set {
+	for k, v := range set {
 		out = append(out, UnresolvedConditional{
 			ResourceType: k.ResourceType,
 			ResourceName: k.ResourceName,
+			ModulePath:   v.ModulePath,
 			Attribute:    k.Attribute,
-			Reason:       reason,
+			Reason:       v.Reason,
 			File:         k.File,
 			Line:         k.Line,
 		})
@@ -595,9 +688,33 @@ func sortedUnresolved(set map[unresolvedRecordKey]string) []UnresolvedConditiona
 		if out[i].Attribute != out[j].Attribute {
 			return out[i].Attribute < out[j].Attribute
 		}
-		return out[i].ResourceName < out[j].ResourceName
+		if out[i].ResourceName != out[j].ResourceName {
+			return out[i].ResourceName < out[j].ResourceName
+		}
+		// Final tiebreaker: walk module-path segments lexicographically.
+		// strings.Join here is only used as a sort key and never as a
+		// dedup key, so the encodeModulePath separator does not need to
+		// be reused — the empty-string separator is fine because we
+		// never compare across paths of unequal length: a length tier
+		// is folded in via the segment-by-segment comparison below.
+		return moduleLess(out[i].ModulePath, out[j].ModulePath)
 	})
 	return out
+}
+
+// moduleLess reports whether a sorts before b under a lexicographic
+// segment-by-segment comparison, with shorter paths sorting before
+// their extensions ([] < [a] < [a, b] < [b]). Centralising the
+// comparison keeps sortedUnresolved's Less function readable and
+// makes the ordering invariant explicit so future code that reorders
+// unresolved entries elsewhere can reuse it.
+func moduleLess(a, b []string) bool {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return len(a) < len(b)
 }
 
 // unresolvedReasonFor returns the parser's classification reason for
