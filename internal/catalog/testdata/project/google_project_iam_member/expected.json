@@ -1,8 +1,12 @@
 {
-  "plan": [
+  "plan_perms": [
     "resourcemanager.projects.getIamPolicy"
   ],
-  "apply": [
+  "apply_only_perms": [
+    "resourcemanager.projects.setIamPolicy"
+  ],
+  "total_apply_perms": [
+    "resourcemanager.projects.getIamPolicy",
     "resourcemanager.projects.setIamPolicy"
   ],
   "unknowns": [],

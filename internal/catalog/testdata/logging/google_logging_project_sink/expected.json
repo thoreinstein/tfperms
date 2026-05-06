@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "logging.sinks.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "logging.sinks.create",
     "logging.sinks.delete",
+    "logging.sinks.update"
+  ],
+  "total_apply_perms": [
+    "logging.sinks.create",
+    "logging.sinks.delete",
+    "logging.sinks.get",
     "logging.sinks.update"
   ],
   "unknowns": [],

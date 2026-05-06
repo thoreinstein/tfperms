@@ -1,10 +1,15 @@
 {
-  "plan": [
+  "plan_perms": [
     "pubsub.schemas.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "pubsub.schemas.create",
     "pubsub.schemas.delete"
+  ],
+  "total_apply_perms": [
+    "pubsub.schemas.create",
+    "pubsub.schemas.delete",
+    "pubsub.schemas.get"
   ],
   "unknowns": [],
   "unresolved": []

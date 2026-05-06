@@ -1,12 +1,20 @@
 {
-  "plan": [
+  "plan_perms": [
     "resourcemanager.projects.getIamPolicy"
   ],
-  "apply": [
+  "apply_only_perms": [
+    "resourcemanager.projects.setIamPolicy"
+  ],
+  "total_apply_perms": [
+    "resourcemanager.projects.getIamPolicy",
     "resourcemanager.projects.setIamPolicy"
   ],
   "unknowns": [
-    "google_iam_policy"
+    {
+      "type": "google_iam_policy",
+      "file": "main.tf",
+      "line": 4
+    }
   ],
   "unresolved": []
 }

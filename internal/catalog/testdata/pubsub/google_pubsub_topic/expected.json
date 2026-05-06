@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "pubsub.topics.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "pubsub.topics.create",
     "pubsub.topics.delete",
+    "pubsub.topics.update"
+  ],
+  "total_apply_perms": [
+    "pubsub.topics.create",
+    "pubsub.topics.delete",
+    "pubsub.topics.get",
     "pubsub.topics.update"
   ],
   "unknowns": [],

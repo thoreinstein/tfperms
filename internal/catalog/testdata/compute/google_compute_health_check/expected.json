@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.healthChecks.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.healthChecks.create",
     "compute.healthChecks.delete",
+    "compute.healthChecks.update"
+  ],
+  "total_apply_perms": [
+    "compute.healthChecks.create",
+    "compute.healthChecks.delete",
+    "compute.healthChecks.get",
     "compute.healthChecks.update"
   ],
   "unknowns": [],

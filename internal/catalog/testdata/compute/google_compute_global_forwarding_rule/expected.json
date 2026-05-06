@@ -1,11 +1,18 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.globalForwardingRules.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.globalAddresses.use",
     "compute.globalForwardingRules.create",
     "compute.globalForwardingRules.delete",
+    "compute.globalForwardingRules.update"
+  ],
+  "total_apply_perms": [
+    "compute.globalAddresses.use",
+    "compute.globalForwardingRules.create",
+    "compute.globalForwardingRules.delete",
+    "compute.globalForwardingRules.get",
     "compute.globalForwardingRules.update"
   ],
   "unknowns": [],

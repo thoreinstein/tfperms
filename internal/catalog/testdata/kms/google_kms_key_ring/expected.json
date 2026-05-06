@@ -1,9 +1,13 @@
 {
-  "plan": [
+  "plan_perms": [
     "cloudkms.keyRings.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "cloudkms.keyRings.create"
+  ],
+  "total_apply_perms": [
+    "cloudkms.keyRings.create",
+    "cloudkms.keyRings.get"
   ],
   "unknowns": [],
   "unresolved": []

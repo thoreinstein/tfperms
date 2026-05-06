@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "cloudsql.users.list"
   ],
-  "apply": [
+  "apply_only_perms": [
     "cloudsql.users.create",
     "cloudsql.users.delete",
+    "cloudsql.users.update"
+  ],
+  "total_apply_perms": [
+    "cloudsql.users.create",
+    "cloudsql.users.delete",
+    "cloudsql.users.list",
     "cloudsql.users.update"
   ],
   "unknowns": [],

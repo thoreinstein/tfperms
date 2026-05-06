@@ -1,10 +1,17 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.disks.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.disks.create",
     "compute.disks.delete",
+    "compute.disks.setLabels",
+    "compute.disks.update"
+  ],
+  "total_apply_perms": [
+    "compute.disks.create",
+    "compute.disks.delete",
+    "compute.disks.get",
     "compute.disks.setLabels",
     "compute.disks.update"
   ],

@@ -1,10 +1,15 @@
 {
-  "plan": [
+  "plan_perms": [
     "iam.serviceAccountKeys.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "iam.serviceAccountKeys.create",
     "iam.serviceAccountKeys.delete"
+  ],
+  "total_apply_perms": [
+    "iam.serviceAccountKeys.create",
+    "iam.serviceAccountKeys.delete",
+    "iam.serviceAccountKeys.get"
   ],
   "unknowns": [],
   "unresolved": []

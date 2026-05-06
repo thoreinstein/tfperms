@@ -1,10 +1,16 @@
 {
-  "plan": [
+  "plan_perms": [
     "compute.firewalls.get"
   ],
-  "apply": [
+  "apply_only_perms": [
     "compute.firewalls.create",
     "compute.firewalls.delete",
+    "compute.firewalls.update"
+  ],
+  "total_apply_perms": [
+    "compute.firewalls.create",
+    "compute.firewalls.delete",
+    "compute.firewalls.get",
     "compute.firewalls.update"
   ],
   "unknowns": [],
