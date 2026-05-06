@@ -720,13 +720,10 @@ func TestResolveThreeSetPartition(t *testing.T) {
 // names; without that the dedup map would correctly collapse them
 // to a single row.
 //
-// Module-path differentiation (which the previous Address-based
-// schema folded into a single string) is now carried by the parser's
-// File field — LoadRecursive sets File to the absolute source path,
-// so two same-named resources in different modules naturally land in
-// different (File, Line) rows. This test does not exercise that path
-// because the synthetic fixtures here have empty File/Line; the
-// catalog regression goldens cover the real-source case.
+// The reused-module case — same Type/Name/File/Line, distinguished
+// only by ModulePath — is covered by
+// TestResolveUnresolvedDistinguishesReusedModuleInstantiations
+// below; this test focuses on the resource/data discrimination.
 func TestResolveUnresolvedDistinguishesResourceAndDataKinds(t *testing.T) {
 	cat := &catalog.Catalog{
 		Resources: map[string]*catalog.ResourceEntry{
@@ -785,6 +782,186 @@ func TestResolveUnresolvedDistinguishesResourceAndDataKinds(t *testing.T) {
 			Reason:       parser.ReasonOther,
 		},
 	})
+}
+
+// TestResolveUnresolvedDistinguishesReusedModuleInstantiations is the
+// regression test for the dedup-key bug an earlier iteration of this
+// schema introduced when it dropped module-path differentiation.
+//
+// LoadRecursive instantiates a single module template at every call
+// site by deep-copying its resources and prepending the call-site
+// module name to ModulePath, but it does not rewrite File or Line —
+// those still point at the module's source file. So two parent call
+// sites (`module "x"` and `module "y"`, both pointing at the same
+// `./mod` directory) produce two parser.Resource values with
+// identical (Type, Name, File, Line) tuples that differ only in
+// ModulePath:
+//
+//	{Type: "google_storage_bucket", Name: "primary",
+//	 File: "/abs/mod/main.tf", Line: 3, ModulePath: ["x"]}
+//	{Type: "google_storage_bucket", Name: "primary",
+//	 File: "/abs/mod/main.tf", Line: 3, ModulePath: ["y"]}
+//
+// If the resolver's dedup map keys on (Type, Name, Attribute, File,
+// Line) only — the bug — both resources collapse to a single
+// Unresolved row and the reporter under-reports: the user sees one
+// warning for two genuinely distinct call sites and cannot tell
+// which one needs the variable default. The dedup key therefore has
+// to incorporate ModulePath (encoded via encodeModulePath into a
+// string that is comparable for use as a map key); the JSON output
+// surfaces the chain via UnresolvedConditional.ModulePath so the
+// reporter can render the module path back to the user.
+//
+// This fixture mirrors the LoadRecursive output shape: same File,
+// same Line, distinct ModulePath. The expected output has TWO rows.
+func TestResolveUnresolvedDistinguishesReusedModuleInstantiations(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	unresolvedAttrs := map[string]cty.Value{"uniform_bucket_level_access": cty.NilVal}
+
+	res := Resolve([]parser.Resource{
+		{
+			Kind:       "resource",
+			Type:       "google_storage_bucket",
+			Name:       "primary",
+			File:       "/abs/mod/main.tf",
+			Line:       3,
+			ModulePath: []string{"x"},
+			Attrs:      unresolvedAttrs,
+		},
+		{
+			Kind:       "resource",
+			Type:       "google_storage_bucket",
+			Name:       "primary",
+			File:       "/abs/mod/main.tf",
+			Line:       3,
+			ModulePath: []string{"y"},
+			Attrs:      unresolvedAttrs,
+		},
+	}, cat)
+
+	// Sort tier here is (File, Line, ResourceType, Attribute,
+	// ResourceName, ModulePath). Both rows tie on the first five so
+	// the ModulePath tiebreaker decides: ["x"] < ["y"].
+	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{
+		{
+			ResourceType: "google_storage_bucket",
+			ResourceName: "primary",
+			ModulePath:   []string{"x"},
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonOther,
+			File:         "/abs/mod/main.tf",
+			Line:         3,
+		},
+		{
+			ResourceType: "google_storage_bucket",
+			ResourceName: "primary",
+			ModulePath:   []string{"y"},
+			Attribute:    "uniform_bucket_level_access",
+			Reason:       parser.ReasonOther,
+			File:         "/abs/mod/main.tf",
+			Line:         3,
+		},
+	})
+}
+
+// TestResolveUnresolvedModulePathSortOrder pins the lexicographic
+// segment-by-segment sort on ModulePath that moduleLess implements:
+// shorter prefixes sort before their extensions, and otherwise the
+// comparison runs through segments in order. Without this assertion
+// a future refactor could replace moduleLess with a strings.Join +
+// string compare that breaks the prefix invariant
+// ([] < [a] < [a, b] < [b]) — strings.Join("a", "") < "ab" but
+// strings.Join("a", "b", "") > strings.Join("ab", "") only by accident
+// of the separator chosen.
+func TestResolveUnresolvedModulePathSortOrder(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	unresolvedAttrs := map[string]cty.Value{"uniform_bucket_level_access": cty.NilVal}
+
+	mk := func(modulePath []string) parser.Resource {
+		return parser.Resource{
+			Kind:       "resource",
+			Type:       "google_storage_bucket",
+			Name:       "primary",
+			File:       "/abs/mod/main.tf",
+			Line:       3,
+			ModulePath: modulePath,
+			Attrs:      unresolvedAttrs,
+		}
+	}
+
+	res := Resolve([]parser.Resource{
+		mk([]string{"foo"}),
+		mk(nil),
+		mk([]string{"foo", "bar"}),
+	}, cat)
+
+	// Expected order: nil/empty < ["foo"] < ["foo", "bar"]. All three
+	// rows tie on (File, Line, Type, Attribute, Name) so the only
+	// discriminator is ModulePath.
+	got := res.Unresolved
+	if len(got) != 3 {
+		t.Fatalf("unresolved length: got %d %#v, want 3", len(got), got)
+	}
+	if got[0].ModulePath != nil {
+		t.Errorf("unresolved[0].ModulePath: got %#v, want nil (root)", got[0].ModulePath)
+	}
+	if want := []string{"foo"}; !reflect.DeepEqual(got[1].ModulePath, want) {
+		t.Errorf("unresolved[1].ModulePath: got %#v, want %#v", got[1].ModulePath, want)
+	}
+	if want := []string{"foo", "bar"}; !reflect.DeepEqual(got[2].ModulePath, want) {
+		t.Errorf("unresolved[2].ModulePath: got %#v, want %#v", got[2].ModulePath, want)
+	}
+}
+
+// TestResolveUnresolvedClonesModulePath pins that the resolver does
+// not share the parser's ModulePath backing array with the JSON
+// output. LoadRecursive caches templates and shares the same slice
+// across multiple call sites; if a downstream caller mutates
+// UnresolvedConditional.ModulePath in place, that mutation must not
+// leak back into the parser's cached state. cloneModulePath is the
+// barrier; this test fails if the resolver ever drops it.
+func TestResolveUnresolvedClonesModulePath(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	parserPath := []string{"original_module"}
+	res := Resolve([]parser.Resource{{
+		Kind:       "resource",
+		Type:       "google_storage_bucket",
+		Name:       "primary",
+		File:       "/abs/mod/main.tf",
+		Line:       3,
+		ModulePath: parserPath,
+		Attrs:      map[string]cty.Value{"uniform_bucket_level_access": cty.NilVal},
+	}}, cat)
+
+	if len(res.Unresolved) != 1 {
+		t.Fatalf("unresolved length: got %d, want 1", len(res.Unresolved))
+	}
+
+	// Mutate the resolver-returned slice and verify the parser-side
+	// slice is untouched.
+	res.Unresolved[0].ModulePath[0] = "MUTATED"
+	if parserPath[0] != "original_module" {
+		t.Errorf("parser ModulePath was mutated through resolver output: got %q, want %q",
+			parserPath[0], "original_module")
+	}
 }
 
 // TestResolveUnknownResourceType pins the Unknowns branch for `resource`
