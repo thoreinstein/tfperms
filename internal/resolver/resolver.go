@@ -214,6 +214,25 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 				if !r.PreventDestroy {
 					addAll(apply, entry.Permissions.Delete)
 				}
+				for _, cond := range entry.Conditionals {
+					matched, missing := matchesConditional(r.Attrs, cond.When)
+					if matched {
+						addAll(plan, cond.Permissions.Plan)
+						addAll(apply, cond.Permissions.Create)
+						addAll(apply, cond.Permissions.Update)
+						if !r.PreventDestroy {
+							addAll(apply, cond.Permissions.Delete)
+						}
+					}
+					for _, attr := range missing {
+						unresolved[unresolvedRecordKey{
+							Address:   resourceAddress(r),
+							Attribute: attr,
+							File:      r.File,
+							Line:      r.Line,
+						}] = struct{}{}
+					}
+				}
 				continue
 			}
 			unknowns[unknownKey{Type: r.Type, File: r.File, Line: r.Line}] = struct{}{}
