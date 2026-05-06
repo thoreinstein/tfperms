@@ -15,11 +15,19 @@
 //     then Catalog.IAMBindings, since the IAM binding types
 //     (google_*_iam_{binding,member,policy}) are also `resource` blocks
 //     in HCL.
-//   - Plan / Apply permission union from the matched entry's base
-//     PermissionSet. Apply is the union of Create, Update, and Delete.
+//   - Three-set permission partition. Per Epic 5 of the PDR:
+//     `plan_perms` are the permissions needed for `terraform plan`'s
+//     state refresh (the entry's Plan list, plus any plan-stage entries
+//     from fired conditionals). `apply_only_perms` are the permissions
+//     needed for `terraform apply` *that are not also in plan_perms* —
+//     computed as `(Create ∪ Update ∪ Delete) \ plan_perms`. A `.get`
+//     permission needed both for refresh and for the update API call
+//     therefore appears only in `plan_perms` and `total_apply_perms`,
+//     not in `apply_only_perms`. `total_apply_perms` is the union of
+//     the two — what an SA running `terraform apply` actually needs.
 //   - Honoring `lifecycle { prevent_destroy = true }` as a literal: a
 //     resource carrying that flag does not contribute Delete
-//     permissions to the Apply set.
+//     permissions to the apply sets.
 //   - Conditional permission application based on attribute matching
 //     against Conditional.When clauses. For each catalog conditional
 //     on the matched entry, the resolver compares the resolved
@@ -32,24 +40,24 @@
 //   - Surfacing unresolved conditionals: when a gating attribute is
 //     present in the When clause but did not resolve to a literal in
 //     the parser (cty.NilVal) AND no other predicate definitively
-//     fails, the resolver emits an entry into Resolution.Unresolved so
-//     the reporter can flag it. The entry key includes the resource's
-//     ModulePath (so a module reused at multiple call sites produces
-//     distinct entries) and a `data.` prefix for `data` blocks (so a
-//     `resource` and `data` block sharing a type/name do not collapse).
-//     See unresolvedKey for the exact format.
+//     fails, the resolver emits an UnresolvedConditional carrying the
+//     resource Address (Terraform-ish, with module path) and the
+//     gating Attribute name. Source-location enrichment (File / Line)
+//     lands in a follow-up phase.
 //   - Unknown resource detection: types that match neither Resources,
-//     DataSources, nor IAMBindings surface in Resolution.Unknowns.
+//     DataSources, nor IAMBindings surface as UnknownResource entries
+//     carrying the Terraform Type. Source-location enrichment lands
+//     in a follow-up phase.
 //
 // What this iteration does NOT yet handle (Epic 5 stories tracked
 // elsewhere):
 //
 //   - --include-delete / --exclude-delete flag plumbing — Delete is
 //     unconditionally included unless prevent_destroy fires.
-//   - Source-location enrichment on Unresolved entries beyond
-//     "<type>.<name>: <attribute>". Future shape will carry file:line
-//     so the reporter can quote the offending block; the current
-//     string form is intentionally simple and stable.
+//   - Source-location (File / Line) enrichment on Unknowns and
+//     Unresolved entries. The struct shapes carry the fields so
+//     downstream consumers compile against the final API; the
+//     resolver does not yet populate them.
 //
 // When Epic 5's full feature set lands here, the per-resource catalog
 // goldens at internal/catalog/testdata/<service>/<type>/expected.json
@@ -67,63 +75,123 @@ import (
 	"github.com/thoreinstein/tfperms/internal/parser"
 )
 
-// Resolution is the output of permission resolution: the IAM permissions
-// a service account needs to run `terraform plan` (Plan) and
-// `terraform apply` (Apply) against the analysed configuration, plus
-// diagnostic lists for resources the catalog does not cover (Unknowns)
-// and conditionals whose gating attributes could not be statically
-// resolved (Unresolved).
+// Result is the output of permission resolution. It carries three
+// distinct permission sets per Epic 5 of docs/tfperms_pdr.md:
+//
+//   - PlanPerms: permissions a service account needs to run
+//     `terraform plan` — dominated by `.get` permissions used during
+//     state refresh, plus the read permissions on data sources.
+//   - ApplyOnlyPerms: permissions needed only at apply time and not
+//     already in PlanPerms — typically `.create` / `.update` /
+//     `.delete`. Computed as `(Create ∪ Update ∪ Delete) \ PlanPerms`,
+//     so a `.get` permission listed under both Plan and Update on a
+//     catalog entry surfaces in PlanPerms only, not here.
+//   - TotalApplyPerms: PlanPerms ∪ ApplyOnlyPerms — what a service
+//     account running `terraform apply` actually needs (apply has to
+//     refresh first, so it inherits the plan permissions).
+//
+// Diagnostic fields:
+//
+//   - Unknowns: Terraform resource types observed in the input that
+//     were not present in any of the catalog's three sections, with
+//     the source File:Line so the reporter can point the user at the
+//     offending block.
+//   - Unresolved: conditional gating attributes that could not be
+//     statically evaluated against a parsed resource. Each entry
+//     carries the resource Address (Terraform-ish, including module
+//     path), the unresolved Attribute name, and the source File:Line.
 //
 // Field invariants:
 //
-//   - Every field is a non-nil slice on a Resolution returned by
-//     Resolve. Empty results render as `[]` in JSON rather than `null`,
-//     so golden files stay shape-stable across runs and downstream
+//   - Every slice field is non-nil on a Result returned by Resolve.
+//     Empty results render as `[]` in JSON rather than `null`, so
+//     golden files stay shape-stable across runs and downstream
 //     consumers (the reporter, future JSON output formats) never have
 //     to nil-check.
-//   - Plan and Apply are sorted ascending and deduplicated. Order is a
-//     contract: the reporter pins flat-list output to the resolver's
-//     order, and the per-resource catalog tests compare byte-by-byte
-//     against goldens.
-//   - Unknowns is the deduplicated, sorted set of Terraform resource
-//     types observed in the input that were not present in any of the
-//     catalog's three sections. The same type appearing on N different
-//     blocks contributes one entry.
-//   - Unresolved is the deduplicated, sorted set of conditional
-//     gating attributes that could not be evaluated against a parsed
-//     resource. Entries follow Terraform-ish addressing so two blocks
-//     of the same type/name are never collapsed: the ModulePath
-//     components (if any) are dotted in front, `data` blocks carry a
-//     `data.` prefix segment, and the trailing form is
-//     "<type>.<name>: <attribute>". A root-level resource therefore
-//     reads "google_storage_bucket.primary: uniform_bucket_level_access"
-//     while the same resource inside a reused `module "foo"` reads
-//     "foo.google_storage_bucket.primary: uniform_bucket_level_access".
-//     See unresolvedKey for the construction.
-type Resolution struct {
-	Plan       []string `json:"plan"`
-	Apply      []string `json:"apply"`
-	Unknowns   []string `json:"unknowns"`
-	Unresolved []string `json:"unresolved"`
+//   - PlanPerms, ApplyOnlyPerms, and TotalApplyPerms are sorted
+//     ascending and deduplicated. Order is a contract: the reporter
+//     pins flat-list output to the resolver's order, and the
+//     per-resource catalog tests compare byte-by-byte against goldens.
+//   - Unknowns and Unresolved are deterministically sorted by
+//     (File, Line, Type/Address, Attribute) so multiple unknowns or
+//     unresolveds in the same configuration produce stable golden
+//     output.
+type Result struct {
+	PlanPerms       []string                `json:"plan_perms"`
+	ApplyOnlyPerms  []string                `json:"apply_only_perms"`
+	TotalApplyPerms []string                `json:"total_apply_perms"`
+	Unknowns        []UnknownResource       `json:"unknowns"`
+	Unresolved      []UnresolvedConditional `json:"unresolved"`
+}
+
+// UnknownResource describes a single Terraform resource or data block
+// whose type is absent from the merged catalog. The reporter surfaces
+// these so users can see which resources tfperms could not analyse and
+// where they live in the configuration.
+//
+// Type is the Terraform type (e.g. `google_iam_policy`). File and Line
+// come from the parser's Resource.File / Resource.Line — for
+// LoadRecursive callers this is an absolute path; the catalog
+// regression harness relativises it before comparing to goldens.
+//
+// File and Line are part of the public API surface but are not
+// populated by the current resolver — Phase 3 of the Epic 5
+// implementation plan wires them up. Until then they marshal as the
+// JSON zero values ("" and 0) so consumers compile against the final
+// shape today.
+type UnknownResource struct {
+	Type string `json:"type"`
+	File string `json:"file"`
+	Line int    `json:"line"`
+}
+
+// UnresolvedConditional describes a single conditional gating attribute
+// that the resolver could not evaluate against a parsed resource. The
+// reporter uses this to warn the user that the permission set may be
+// incomplete because a `var.X` or function call hid an attribute the
+// catalog's `when:` clause depends on.
+//
+// Address is the Terraform-ish identifier of the resource — the module
+// path (if any), a `data.` segment for `data` blocks, and the
+// `<type>.<name>` pair. See resourceAddress for the exact format.
+//
+// Attribute is the bare attribute name from the catalog's `when:`
+// clause; not prefixed with the address.
+//
+// File and Line locate the resource block in the source. As with
+// UnknownResource, this is whatever the parser recorded, so the catalog
+// regression harness relativises it before comparing against goldens.
+//
+// File and Line are part of the public API surface but are not
+// populated by the current resolver — Phase 3 of the Epic 5
+// implementation plan wires them up. Until then they marshal as the
+// JSON zero values ("" and 0) so consumers compile against the final
+// shape today.
+type UnresolvedConditional struct {
+	Address   string `json:"address"`
+	Attribute string `json:"attribute"`
+	File      string `json:"file"`
+	Line      int    `json:"line"`
 }
 
 // Resolve combines the parsed resource set with the merged catalog and
-// returns a Resolution. See the package doc for the current scope and
-// what is deferred to Epic 5.
+// returns a Result. See the package doc and Result's doc for the
+// permission-set semantics.
 //
 // A nil catalog is treated as "no catalog loaded": every resource type
-// surfaces as an Unknown and Plan / Apply are empty. This avoids a panic
-// on early-startup callers that have a partial pipeline; production
-// callers should always pass a catalog produced by catalog.Load.
+// surfaces as an Unknown and the permission sets are empty. This
+// avoids a panic on early-startup callers that have a partial pipeline;
+// production callers should always pass a catalog produced by
+// catalog.Load.
 //
 // Resolve is pure — it does not mutate either input. The returned slices
 // are freshly allocated so a caller can sort or filter them in place
 // without affecting subsequent calls.
-func Resolve(resources []parser.Resource, cat *catalog.Catalog) Resolution {
+func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 	plan := make(map[string]struct{})
 	apply := make(map[string]struct{})
-	unknowns := make(map[string]struct{})
-	unresolved := make(map[string]struct{})
+	unknowns := make(map[unknownKey]struct{})
+	unresolved := make(map[unresolvedRecordKey]struct{})
 
 	for _, r := range resources {
 		switch r.Kind {
@@ -146,7 +214,10 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Resolution {
 						}
 					}
 					for _, attr := range missing {
-						unresolved[unresolvedKey(r, attr)] = struct{}{}
+						unresolved[unresolvedRecordKey{
+							Address:   resourceAddress(r),
+							Attribute: attr,
+						}] = struct{}{}
 					}
 				}
 				continue
@@ -160,7 +231,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Resolution {
 				}
 				continue
 			}
-			unknowns[r.Type] = struct{}{}
+			unknowns[unknownKey{Type: r.Type}] = struct{}{}
 		case "data":
 			if entry := lookupDataSource(cat, r.Type); entry != nil {
 				addAll(plan, entry.Permissions.Plan)
@@ -170,12 +241,15 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Resolution {
 						addAll(plan, cond.Permissions.Plan)
 					}
 					for _, attr := range missing {
-						unresolved[unresolvedKey(r, attr)] = struct{}{}
+						unresolved[unresolvedRecordKey{
+							Address:   resourceAddress(r),
+							Attribute: attr,
+						}] = struct{}{}
 					}
 				}
 				continue
 			}
-			unknowns[r.Type] = struct{}{}
+			unknowns[unknownKey{Type: r.Type}] = struct{}{}
 		}
 		// Unknown Kind (neither "resource" nor "data") is silently
 		// ignored. The parser's contract guarantees Kind is one of
@@ -183,12 +257,41 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Resolution {
 		// defensive only.
 	}
 
-	return Resolution{
-		Plan:       sortedSet(plan),
-		Apply:      sortedSet(apply),
-		Unknowns:   sortedSet(unknowns),
-		Unresolved: sortedSet(unresolved),
+	planPerms := sortedSet(plan)
+	applyOnlyPerms := subtractSorted(apply, plan)
+	totalApplyPerms := sortedUnion(plan, apply)
+
+	return Result{
+		PlanPerms:       planPerms,
+		ApplyOnlyPerms:  applyOnlyPerms,
+		TotalApplyPerms: totalApplyPerms,
+		Unknowns:        sortedUnknowns(unknowns),
+		Unresolved:      sortedUnresolved(unresolved),
 	}
+}
+
+// unknownKey is the dedup key for entries surfaced into Result.Unknowns.
+// Two unknown blocks with the same type at different file/line
+// locations produce two entries — diagnostics that suppress one would
+// under-report. Two blocks with literally identical (Type, File, Line)
+// cannot coexist in well-formed Terraform, so the collapse is harmless.
+type unknownKey struct {
+	Type string
+	File string
+	Line int
+}
+
+// unresolvedRecordKey is the dedup key for entries surfaced into
+// Result.Unresolved. Address already encodes module path and Kind, so
+// two block instances at the same address can only differ by source
+// location — including File and Line in the key avoids collapsing
+// the same logical block reported from two parser passes (defensive;
+// the current parser does not produce duplicates).
+type unresolvedRecordKey struct {
+	Address   string
+	Attribute string
+	File      string
+	Line      int
 }
 
 // lookupResource returns the catalog entry for a `resource` block type,
@@ -222,46 +325,43 @@ func lookupIAMBinding(cat *catalog.Catalog, typ string) *catalog.IAMBindingEntry
 	return cat.IAMBindings[typ]
 }
 
-// unresolvedKey formats the dedup / display key for a single
-// (resource, attribute) pair surfaced into Resolution.Unresolved. The
-// shape is Terraform-ish so two blocks that differ only in their
-// instantiation context never collapse into the same entry:
+// resourceAddress formats the Terraform-ish identifier of a resource
+// for use as the Address field on UnresolvedConditional.
+//
+// The shape is module path (if any, dotted in front), then a `data.`
+// segment for `data` blocks, then `<type>.<name>`. Two blocks that
+// differ only in their instantiation context never collapse into the
+// same address:
 //
 //   - ModulePath components (when LoadRecursive populated them) are
 //     dotted in front, preserving outer-to-inner traversal order. A
-//     module reused at two call sites therefore produces two
-//     distinct entries even when the inner resource has the same
-//     type/name.
+//     module reused at two call sites therefore produces two distinct
+//     entries even when the inner resource has the same type/name.
 //   - `data` blocks carry an explicit `data.` segment after the module
 //     path, so a `resource "google_storage_bucket" "x"` and a
 //     `data "google_storage_bucket" "x"` in the same scope do not
 //     collapse.
-//   - The trailing form is "<type>.<name>: <attribute>" — same as the
-//     pre-disambiguation format, so reporters that already pattern-
-//     match the colon separator keep working.
 //
 // Examples:
 //
-//   - Root resource:  "google_storage_bucket.primary: uniform_bucket_level_access"
-//   - Root data:      "data.google_storage_bucket.primary: location"
-//   - Reused module:  "foo.google_storage_bucket.primary: uniform_bucket_level_access"
-//   - Nested module:  "foo.bar.google_storage_bucket.primary: uniform_bucket_level_access"
-//   - Module + data:  "foo.data.google_storage_bucket.primary: location"
-func unresolvedKey(r parser.Resource, attr string) string {
-	var prefix strings.Builder
+//   - Root resource:  "google_storage_bucket.primary"
+//   - Root data:      "data.google_storage_bucket.primary"
+//   - Reused module:  "foo.google_storage_bucket.primary"
+//   - Nested module:  "foo.bar.google_storage_bucket.primary"
+//   - Module + data:  "foo.data.google_storage_bucket.primary"
+func resourceAddress(r parser.Resource) string {
+	var b strings.Builder
 	for _, seg := range r.ModulePath {
-		prefix.WriteString(seg)
-		prefix.WriteByte('.')
+		b.WriteString(seg)
+		b.WriteByte('.')
 	}
 	if r.Kind == "data" {
-		prefix.WriteString("data.")
+		b.WriteString("data.")
 	}
-	prefix.WriteString(r.Type)
-	prefix.WriteByte('.')
-	prefix.WriteString(r.Name)
-	prefix.WriteString(": ")
-	prefix.WriteString(attr)
-	return prefix.String()
+	b.WriteString(r.Type)
+	b.WriteByte('.')
+	b.WriteString(r.Name)
+	return b.String()
 }
 
 // matchesConditional evaluates a Conditional / DataSourceConditional
@@ -280,7 +380,7 @@ func unresolvedKey(r parser.Resource, attr string) string {
 // Short-circuit on definitive failure: if any predicate evaluates to a
 // resolved-but-unequal value, the conditional definitively does not
 // fire and missing is returned empty regardless of other predicates'
-// status. This keeps Resolution.Unresolved free of noise from sibling
+// status. This keeps Result.Unresolved free of noise from sibling
 // predicates whose evaluation would not have changed the outcome.
 //
 // Iteration order over `when` is randomised by Go's map runtime, so the
@@ -390,7 +490,7 @@ func addAll(set map[string]struct{}, items []string) {
 
 // sortedSet returns set's keys in lexicographic order as a non-nil slice.
 // An empty set yields an empty (length 0, non-nil) slice so JSON
-// marshalling renders `[]` rather than `null`; the Resolution field
+// marshalling renders `[]` rather than `null`; the Result field
 // invariants depend on this.
 func sortedSet(set map[string]struct{}) []string {
 	out := make([]string, 0, len(set))
@@ -398,5 +498,98 @@ func sortedSet(set map[string]struct{}) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// subtractSorted returns the elements of left not present in right,
+// sorted ascending. Always returns a non-nil slice so JSON marshals as
+// `[]`. Used to compute ApplyOnlyPerms = (Create ∪ Update ∪ Delete) \
+// PlanPerms — a permission appearing in both the apply maps and the
+// plan map belongs to PlanPerms only, not ApplyOnlyPerms.
+func subtractSorted(left, right map[string]struct{}) []string {
+	out := make([]string, 0, len(left))
+	for k := range left {
+		if _, inRight := right[k]; inRight {
+			continue
+		}
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedUnion returns the union of left and right as a sorted, non-nil
+// slice. Used to compute TotalApplyPerms = PlanPerms ∪ ApplyOnlyPerms
+// — what an SA running `terraform apply` actually needs (apply has to
+// refresh state first, so it inherits all plan permissions).
+func sortedUnion(left, right map[string]struct{}) []string {
+	out := make([]string, 0, len(left)+len(right))
+	seen := make(map[string]struct{}, len(left)+len(right))
+	for _, src := range []map[string]struct{}{left, right} {
+		for k := range src {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedUnknowns returns the unknown-resource set as a sorted, non-nil
+// slice of UnknownResource. Sort order is (File, Line, Type) so that
+// reporters listing unknowns in the order they appear in source files
+// can rely on file:line monotonicity, with Type as the tiebreaker for
+// the unlikely-but-defensible case of two unknown blocks at the same
+// location (would happen only on a malformed parser pass).
+func sortedUnknowns(set map[unknownKey]struct{}) []UnknownResource {
+	out := make([]UnknownResource, 0, len(set))
+	for k := range set {
+		// unknownKey and UnknownResource carry the same field set —
+		// the internal type stays unexported to keep map-key usage
+		// from leaking into the API; convert at the boundary.
+		out = append(out, UnknownResource(k))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		return out[i].Type < out[j].Type
+	})
+	return out
+}
+
+// sortedUnresolved returns the unresolved-conditional set as a sorted,
+// non-nil slice of UnresolvedConditional. Sort order is (File, Line,
+// Address, Attribute) so reporters can walk entries in source order
+// per file. Address is the secondary tiebreaker so root and module-
+// nested entries with the same source location (e.g. zero-valued File
+// in unit tests) stay sorted by Terraform address.
+func sortedUnresolved(set map[unresolvedRecordKey]struct{}) []UnresolvedConditional {
+	out := make([]UnresolvedConditional, 0, len(set))
+	for k := range set {
+		// unresolvedRecordKey and UnresolvedConditional carry the same
+		// field set — the internal type stays unexported to keep
+		// map-key usage from leaking into the API; convert at the
+		// boundary.
+		out = append(out, UnresolvedConditional(k))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		if out[i].Address != out[j].Address {
+			return out[i].Address < out[j].Address
+		}
+		return out[i].Attribute < out[j].Attribute
+	})
 	return out
 }
