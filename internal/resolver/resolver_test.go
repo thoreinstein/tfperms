@@ -596,6 +596,97 @@ func TestResolveUnknownDataSourceType(t *testing.T) {
 	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
+// TestResolveUnknownResourceCapturesSourceLocation pins that the
+// resolver propagates parser.Resource.File and parser.Resource.Line
+// onto UnknownResource entries. Reporters need this to point users at
+// the offending block; without it the warning is just "tfperms does
+// not know about google_unknown_resource" with no way to find which
+// of the user's files declares it.
+//
+// Two unknown blocks of the SAME Terraform type at DIFFERENT source
+// locations must surface as two distinct UnknownResource entries —
+// otherwise a configuration with the same uncovered type used in
+// several places would under-report.
+func TestResolveUnknownResourceCapturesSourceLocation(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources:   map[string]*catalog.ResourceEntry{},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{},
+	}
+
+	res := Resolve([]parser.Resource{
+		{Kind: "resource", Type: "google_unknown", Name: "a", File: "main.tf", Line: 10},
+		{Kind: "resource", Type: "google_unknown", Name: "b", File: "main.tf", Line: 20},
+		{Kind: "resource", Type: "google_unknown", Name: "c", File: "other.tf", Line: 5},
+	}, cat)
+
+	// Sort order is (File, Line, Type): "main.tf" < "other.tf"; within
+	// "main.tf", line 10 < line 20.
+	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
+		{Type: "google_unknown", File: "main.tf", Line: 10},
+		{Type: "google_unknown", File: "main.tf", Line: 20},
+		{Type: "google_unknown", File: "other.tf", Line: 5},
+	})
+}
+
+// TestResolveUnresolvedConditionalCapturesSourceLocation pins that the
+// resolver propagates parser.Resource.File and parser.Resource.Line
+// onto UnresolvedConditional entries. The reporter uses this to quote
+// the offending block when warning about unresolved conditionals — Epic
+// 5's "surface unresolved conditionals as warnings tied to the resource
+// and attribute, with file:line context" story.
+//
+// Two resources sharing a type/name but declared in different files
+// produce distinct entries; the address-only dedup of an earlier
+// iteration would have collapsed them and lost the second file's
+// warning.
+func TestResolveUnresolvedConditionalCapturesSourceLocation(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	unresolvedAttrs := map[string]cty.Value{"uniform_bucket_level_access": cty.NilVal}
+
+	res := Resolve([]parser.Resource{
+		{
+			Kind:  "resource",
+			Type:  "google_storage_bucket",
+			Name:  "primary",
+			File:  "buckets.tf",
+			Line:  3,
+			Attrs: unresolvedAttrs,
+		},
+		{
+			Kind:  "resource",
+			Type:  "google_storage_bucket",
+			Name:  "primary",
+			File:  "other.tf",
+			Line:  17,
+			Attrs: unresolvedAttrs,
+		},
+	}, cat)
+
+	// Sort order is (File, Line, Address, Attribute): "buckets.tf"
+	// before "other.tf".
+	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{
+		{
+			Address:   "google_storage_bucket.primary",
+			Attribute: "uniform_bucket_level_access",
+			File:      "buckets.tf",
+			Line:      3,
+		},
+		{
+			Address:   "google_storage_bucket.primary",
+			Attribute: "uniform_bucket_level_access",
+			File:      "other.tf",
+			Line:      17,
+		},
+	})
+}
+
 // singleResourceCatalog returns a Catalog with one ResourceEntry for
 // google_storage_bucket carrying the standard plan/create/update/delete
 // permissions. Conditionals override is appended verbatim. Used to
