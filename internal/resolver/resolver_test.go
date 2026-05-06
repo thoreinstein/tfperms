@@ -4,16 +4,18 @@ package resolver
 // internal/catalog/resource_test.go covers the happy paths through real
 // fixtures; this file fills the gaps that would be awkward to express
 // as fixtures — definitive-mismatch conditionals (where the gating
-// attribute is resolved but does not equal the expected value) and
+// attribute is resolved but does not equal the expected value),
 // unresolved conditionals (where the gating attribute is cty.NilVal,
 // which the parser emits for unresolved expressions but our literal
-// fixtures never produce).
+// fixtures never produce), and the three-set permission partition
+// (PlanPerms / ApplyOnlyPerms / TotalApplyPerms).
 //
 // Tests construct catalogs in-memory rather than going through
 // catalog.Load so a single test can isolate one branch of Resolve at a
 // time.
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/zclconf/go-cty/cty"
@@ -24,7 +26,10 @@ import (
 
 // TestResolveConditionalFires verifies the happy path: a resource block
 // whose attribute matches the conditional's `when:` predicate gets the
-// conditional's permissions unioned onto the base set.
+// conditional's permissions unioned onto the base set. None of the
+// permissions overlap between Plan and Apply for this fixture, so
+// ApplyOnlyPerms equals (Create ∪ Update ∪ Delete) and TotalApplyPerms
+// is the union of every permission in play.
 func TestResolveConditionalFires(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
 		When: map[string]any{"uniform_bucket_level_access": true},
@@ -45,21 +50,30 @@ func TestResolveConditionalFires(t *testing.T) {
 	}}, cat)
 
 	wantPlan := []string{"storage.buckets.get", "storage.buckets.getIamPolicy"}
-	wantApply := []string{
+	wantApplyOnly := []string{
 		"storage.buckets.create",
 		"storage.buckets.delete",
 		"storage.buckets.setIamPolicy",
 		"storage.buckets.update",
 	}
-	assertSliceEqual(t, "plan", res.Plan, wantPlan)
-	assertSliceEqual(t, "apply", res.Apply, wantApply)
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	wantTotalApply := []string{
+		"storage.buckets.create",
+		"storage.buckets.delete",
+		"storage.buckets.get",
+		"storage.buckets.getIamPolicy",
+		"storage.buckets.setIamPolicy",
+		"storage.buckets.update",
+	}
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, wantPlan)
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, wantApplyOnly)
+	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, wantTotalApply)
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolveConditionalDoesNotFire verifies that a resource whose
 // gating attribute is resolved but unequal to the predicate's expected
 // value does NOT receive the conditional's permissions, AND does NOT
-// surface anything in Resolution.Unresolved (definitive mismatch is not
+// surface anything in Result.Unresolved (definitive mismatch is not
 // noise-worthy).
 func TestResolveConditionalDoesNotFire(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
@@ -79,20 +93,20 @@ func TestResolveConditionalDoesNotFire(t *testing.T) {
 		},
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
-	assertSliceEqual(t, "apply", res.Apply, []string{
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
 		"storage.buckets.create",
 		"storage.buckets.delete",
 		"storage.buckets.update",
 	})
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolveConditionalUnresolved verifies that when the gating
 // attribute is unresolved (cty.NilVal — what the parser emits for an
 // expression it cannot statically evaluate, e.g. a `var.X` whose
 // variable has no default), the resolver flags it via
-// Resolution.Unresolved and does NOT union the conditional's permissions.
+// Result.Unresolved and does NOT union the conditional's permissions.
 func TestResolveConditionalUnresolved(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
 		When: map[string]any{"uniform_bucket_level_access": true},
@@ -111,15 +125,16 @@ func TestResolveConditionalUnresolved(t *testing.T) {
 		},
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
-	assertSliceEqual(t, "apply", res.Apply, []string{
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
 		"storage.buckets.create",
 		"storage.buckets.delete",
 		"storage.buckets.update",
 	})
-	assertSliceEqual(t, "unresolved", res.Unresolved, []string{
-		"google_storage_bucket.primary: uniform_bucket_level_access",
-	})
+	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{{
+		Address:   "google_storage_bucket.primary",
+		Attribute: "uniform_bucket_level_access",
+	}})
 }
 
 // TestResolveConditionalDefinitiveMismatchSwallowsUnresolved verifies
@@ -151,7 +166,7 @@ func TestResolveConditionalDefinitiveMismatchSwallowsUnresolved(t *testing.T) {
 		},
 	}}, cat)
 
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolveConditionalNumberInt verifies that an `int` literal in a
@@ -175,11 +190,11 @@ func TestResolveConditionalNumberInt(t *testing.T) {
 		},
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, []string{
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{
 		"storage.buckets.get",
 		"storage.buckets.getIamPolicy",
 	})
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolveConditionalNumberInt64Exact pins the precision contract
@@ -216,7 +231,7 @@ func TestResolveConditionalNumberInt64Exact(t *testing.T) {
 			"quota_limit": cty.NumberIntVal(twoTo53Plus),
 		},
 	}}, cat)
-	assertSliceEqual(t, "exact plan", exact.Plan, []string{
+	assertSliceEqual(t, "exact plan_perms", exact.PlanPerms, []string{
 		"storage.buckets.get",
 		"storage.buckets.getIamPolicy",
 	})
@@ -232,7 +247,7 @@ func TestResolveConditionalNumberInt64Exact(t *testing.T) {
 			"quota_limit": cty.NumberIntVal(twoTo53),
 		},
 	}}, cat)
-	assertSliceEqual(t, "off plan", off.Plan, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "off plan_perms", off.PlanPerms, []string{"storage.buckets.get"})
 }
 
 // TestResolveConditionalNumberFloat64 verifies that a float64 literal
@@ -256,7 +271,7 @@ func TestResolveConditionalNumberFloat64(t *testing.T) {
 		},
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, []string{
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{
 		"storage.buckets.get",
 		"storage.buckets.getIamPolicy",
 	})
@@ -283,8 +298,8 @@ func TestResolveConditionalNumberMismatch(t *testing.T) {
 	}}, cat)
 
 	// The conditional did not fire — base permissions only.
-	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolveConditionalNumberWrongType verifies that a numeric
@@ -311,14 +326,14 @@ func TestResolveConditionalNumberWrongType(t *testing.T) {
 		},
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolvePreventDestroy verifies that
 // `lifecycle { prevent_destroy = true }` (surfaced as
 // parser.Resource.PreventDestroy) suppresses the catalog entry's Delete
-// permissions from the Apply set, while leaving Plan / Create / Update
+// permissions from the apply sets, while leaving Plan / Create / Update
 // untouched.
 func TestResolvePreventDestroy(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
@@ -330,10 +345,15 @@ func TestResolvePreventDestroy(t *testing.T) {
 		PreventDestroy: true,
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
-	// storage.buckets.delete must NOT appear.
-	assertSliceEqual(t, "apply", res.Apply, []string{
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+	// storage.buckets.delete must NOT appear in either apply set.
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
 		"storage.buckets.create",
+		"storage.buckets.update",
+	})
+	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, []string{
+		"storage.buckets.create",
+		"storage.buckets.get",
 		"storage.buckets.update",
 	})
 }
@@ -346,12 +366,12 @@ func TestResolvePreventDestroy(t *testing.T) {
 // regression test pinning it.
 //
 // The assertions match the shape used elsewhere in this file: full
-// expected plan / apply slices in lexicographic order. A
-// presence-only check on `storage.buckets.delete*` would miss a
-// regression where Resolve dropped Create or Update from the conditional
-// (still satisfying the negative assertion while breaking the contract);
-// the equality check pins both the suppression of Delete and the union
-// of every other permission stage.
+// expected slices in lexicographic order. A presence-only check on
+// `storage.buckets.delete*` would miss a regression where Resolve
+// dropped Create or Update from the conditional (still satisfying the
+// negative assertion while breaking the contract); the equality check
+// pins both the suppression of Delete and the union of every other
+// permission stage.
 func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
 		When: map[string]any{"uniform_bucket_level_access": true},
@@ -373,24 +393,83 @@ func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 	// The base PermissionSet has no Plan beyond storage.buckets.get,
 	// and the conditional contributes only Delete (which prevent_destroy
 	// suppresses). Plan therefore stays at the base entry.
-	assertSliceEqual(t, "plan", res.Plan, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 	// Apply: base Create + Update only. Both Delete sources —
 	// base storage.buckets.delete and the fired conditional's
 	// storage.buckets.deleteIamPolicy — must be suppressed.
-	assertSliceEqual(t, "apply", res.Apply, []string{
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
 		"storage.buckets.create",
 		"storage.buckets.update",
 	})
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
-// TestResolveUnresolvedKeyDistinguishesModulesAndKinds pins the dedup
-// key format for Resolution.Unresolved. The same `<type>.<name>` block
-// can appear multiple times in a resolution input — once at the root,
-// again inside a reused module, and once more as a `data` block — and
-// each instance must surface a distinct Unresolved entry when its
-// gating attribute is unresolved. Otherwise a single noisy module call
-// would silently mask its sibling and the reporter would under-report.
+// TestResolveThreeSetPartition pins the three-set partition contract:
+// a permission appearing in BOTH the entry's Plan list (refresh) AND
+// its Update list (apply) must surface in PlanPerms and TotalApplyPerms
+// but NOT in ApplyOnlyPerms. The PDR's Epic 5 calls this out as the
+// distinguishing characteristic of `apply_only_perms`: "apply
+// permissions that are not also plan permissions". A naive resolver
+// that just unions Create / Update / Delete into a separate set would
+// silently double-count overlapping permissions when the reporter
+// concatenates PlanPerms + ApplyOnlyPerms; the partition prevents that.
+//
+// The fixture is contrived but the situation is real: imagine a
+// hypothetical resource whose Update API call requires `.get` to read
+// the existing state before writing the change. A literal entry with
+// Plan = [".get"] and Update = [".get"] expresses this without
+// double-counting.
+func TestResolveThreeSetPartition(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources: map[string]*catalog.ResourceEntry{
+			"google_storage_bucket": {
+				Type: "google_storage_bucket",
+				Permissions: catalog.PermissionSet{
+					// .get appears in BOTH stages.
+					Plan:   []string{"storage.buckets.get"},
+					Create: []string{"storage.buckets.create"},
+					// Update needs the same .get the refresh needs.
+					Update: []string{"storage.buckets.get", "storage.buckets.update"},
+					Delete: []string{"storage.buckets.delete"},
+				},
+			},
+		},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{},
+	}
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+	}}, cat)
+
+	// PlanPerms gets .get.
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+	// ApplyOnlyPerms is (Create ∪ Update ∪ Delete) \ PlanPerms.
+	// The Update list contributes .update (kept) and .get (dropped — in PlanPerms).
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
+		"storage.buckets.create",
+		"storage.buckets.delete",
+		"storage.buckets.update",
+	})
+	// TotalApplyPerms is the union — .get appears here exactly once.
+	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, []string{
+		"storage.buckets.create",
+		"storage.buckets.delete",
+		"storage.buckets.get",
+		"storage.buckets.update",
+	})
+}
+
+// TestResolveUnresolvedAddressDistinguishesModulesAndKinds pins the
+// dedup key format for Result.Unresolved. The same `<type>.<name>`
+// block can appear multiple times in a resolution input — once at the
+// root, again inside a reused module, and once more as a `data` block
+// — and each instance must surface a distinct Unresolved entry when
+// its gating attribute is unresolved. Otherwise a single noisy module
+// call would silently mask its sibling and the reporter would
+// under-report.
 //
 // This test seeds four resources sharing the type/name
 // `google_storage_bucket.primary` but differing in (Kind, ModulePath):
@@ -402,9 +481,9 @@ func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 //
 // All four have an unresolved gating attribute, so all four must land
 // in Unresolved as separate entries, sorted lexicographically by the
-// unresolvedKey shape (module-path dotted in front, `data.` segment
-// for data blocks, then `<type>.<name>: <attribute>`).
-func TestResolveUnresolvedKeyDistinguishesModulesAndKinds(t *testing.T) {
+// resourceAddress shape (module-path dotted in front, `data.` segment
+// for data blocks, then `<type>.<name>`).
+func TestResolveUnresolvedAddressDistinguishesModulesAndKinds(t *testing.T) {
 	cat := &catalog.Catalog{
 		Resources: map[string]*catalog.ResourceEntry{
 			"google_storage_bucket": {
@@ -446,21 +525,21 @@ func TestResolveUnresolvedKeyDistinguishesModulesAndKinds(t *testing.T) {
 		{Kind: "resource", Type: "google_storage_bucket", Name: "primary", ModulePath: []string{"foo", "bar"}, Attrs: unresolvedAttrs},
 	}, cat)
 
-	// Sorted lexicographically: "data..." < "foo.bar..." < "foo..." <
-	// "google_..." — actually 'd' < 'f' < 'g', and within "foo*",
+	// Sorted lexicographically by Address: "data..." < "foo.bar..." <
+	// "foo..." < "google_..." — 'd' < 'f' < 'g', and within "foo*",
 	// "foo.bar.google_..." < "foo.google_...". Spell out the expected
-	// order so the test fails loudly if anyone shuffles unresolvedKey.
-	assertSliceEqual(t, "unresolved", res.Unresolved, []string{
-		"data.google_storage_bucket.primary: uniform_bucket_level_access",
-		"foo.bar.google_storage_bucket.primary: uniform_bucket_level_access",
-		"foo.google_storage_bucket.primary: uniform_bucket_level_access",
-		"google_storage_bucket.primary: uniform_bucket_level_access",
+	// order so the test fails loudly if anyone shuffles resourceAddress.
+	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{
+		{Address: "data.google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
+		{Address: "foo.bar.google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
+		{Address: "foo.google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
+		{Address: "google_storage_bucket.primary", Attribute: "uniform_bucket_level_access"},
 	})
 }
 
 // TestResolveUnknownResourceType pins the Unknowns branch for `resource`
 // blocks: when a parsed resource's type is in neither Catalog.Resources
-// nor Catalog.IAMBindings, it surfaces in Resolution.Unknowns and
+// nor Catalog.IAMBindings, it surfaces in Result.Unknowns and
 // contributes nothing to plan / apply. Uses an empty catalog so the
 // unknown branch is the only path through Resolve.
 func TestResolveUnknownResourceType(t *testing.T) {
@@ -476,22 +555,25 @@ func TestResolveUnknownResourceType(t *testing.T) {
 		Name: "x",
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, nil)
-	assertSliceEqual(t, "apply", res.Apply, nil)
-	assertSliceEqual(t, "unknowns", res.Unknowns, []string{"google_unknown_resource"})
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, nil)
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, nil)
+	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, nil)
+	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
+		{Type: "google_unknown_resource"},
+	})
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // TestResolveUnknownDataSourceType pins the Unknowns branch for `data`
 // blocks: a data block whose type is absent from Catalog.DataSources
-// surfaces in Resolution.Unknowns. The current key shape does not
-// distinguish unknown resources from unknown data sources (both store
-// r.Type), so a sibling `resource` block of the same unknown type
-// would collapse into the same entry — that is intentional under
-// today's Unknowns contract and beyond the scope of the unresolved-key
-// disambiguation. The test pins the type-only key so a future change
-// (e.g. mirroring unresolvedKey's `data.` prefix into Unknowns) is a
-// deliberate, test-flagged decision rather than a silent shift.
+// surfaces in Result.Unknowns. The Unknowns key encodes the parser's
+// File and Line in addition to the Type, so a `data` block and a
+// `resource` block of the same type at different source locations
+// produce distinct entries — this test does not exercise that
+// distinction (zero-valued File/Line on both sides would collapse a
+// resource and a data block of the same Type), and the resource_test.go
+// fixture for google_project_iam_policy is the regression for the
+// real-source-location case.
 func TestResolveUnknownDataSourceType(t *testing.T) {
 	cat := &catalog.Catalog{
 		Resources:   map[string]*catalog.ResourceEntry{},
@@ -505,10 +587,13 @@ func TestResolveUnknownDataSourceType(t *testing.T) {
 		Name: "x",
 	}}, cat)
 
-	assertSliceEqual(t, "plan", res.Plan, nil)
-	assertSliceEqual(t, "apply", res.Apply, nil)
-	assertSliceEqual(t, "unknowns", res.Unknowns, []string{"google_unknown_data"})
-	assertSliceEqual(t, "unresolved", res.Unresolved, nil)
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, nil)
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, nil)
+	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, nil)
+	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
+		{Type: "google_unknown_data"},
+	})
+	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
 // singleResourceCatalog returns a Catalog with one ResourceEntry for
@@ -557,6 +642,57 @@ func assertSliceEqual(t *testing.T, label string, got, want []string) {
 	for i := range got {
 		if got[i] != want[i] {
 			t.Errorf("%s[%d]: got %q, want %q (full got=%v, want=%v)", label, i, got[i], want[i], got, want)
+			return
+		}
+	}
+}
+
+// assertUnknownsEqual fails the test when got and want differ in
+// length, order, or any field of any entry. A nil want is treated as
+// the empty slice so callers can write `nil` for the no-unknowns case.
+//
+// Uses reflect.DeepEqual on each pair so a missing field comparison
+// (e.g. a future field added to UnknownResource that the test forgot
+// to set) is caught structurally rather than requiring per-field
+// asserts.
+func assertUnknownsEqual(t *testing.T, got, want []UnknownResource) {
+	t.Helper()
+	if want == nil {
+		want = []UnknownResource{}
+	}
+	if len(got) != len(want) {
+		t.Errorf("unknowns length: got %d %v, want %d %v", len(got), got, len(want), want)
+		return
+	}
+	for i := range got {
+		if !reflect.DeepEqual(got[i], want[i]) {
+			t.Errorf("unknowns[%d]: got %#v, want %#v (full got=%#v, want=%#v)", i, got[i], want[i], got, want)
+			return
+		}
+	}
+}
+
+// assertUnresolvedEqual fails the test when got and want differ in
+// length, order, or any field of any entry. A nil want is treated as
+// the empty slice so callers can write `nil` for the no-unresolved
+// case.
+//
+// Uses reflect.DeepEqual on each pair so a missing field comparison
+// (e.g. a future field added to UnresolvedConditional that the test
+// forgot to set) is caught structurally rather than requiring
+// per-field asserts.
+func assertUnresolvedEqual(t *testing.T, got, want []UnresolvedConditional) {
+	t.Helper()
+	if want == nil {
+		want = []UnresolvedConditional{}
+	}
+	if len(got) != len(want) {
+		t.Errorf("unresolved length: got %d %v, want %d %v", len(got), got, len(want), want)
+		return
+	}
+	for i := range got {
+		if !reflect.DeepEqual(got[i], want[i]) {
+			t.Errorf("unresolved[%d]: got %#v, want %#v (full got=%#v, want=%#v)", i, got[i], want[i], got, want)
 			return
 		}
 	}
