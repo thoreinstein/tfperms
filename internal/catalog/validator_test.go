@@ -345,6 +345,51 @@ resources:
 			wantSubs: []string{"conditionals[0]", "must add at least one permission"},
 		},
 		{
+			// Pins that validateIAMBindingEntry walks Conditionals and
+			// runs validateConditional on each one — a regression that
+			// dropped the IAM binding conditional loop in validator.go
+			// would let a malformed IAM binding conditional reach the
+			// resolver. The error path identifier (iam_bindings/...:
+			// conditionals[0]) also pins that the loc string built
+			// inside the IAM binding loop quotes the right entry kind:
+			// reusing the resource loc by mistake would surface
+			// "resources/..." here and fail the substring assertion.
+			name: "iam binding conditional with empty when",
+			yaml: `
+resources:
+  google_storage_bucket:
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.get]
+iam_bindings:
+  google_storage_bucket_iam_binding:
+    parent_resource: google_storage_bucket
+    verification:
+      method: docs+source
+      source_urls: [https://example.test/iam]
+      verified_at: "2025-12-15"
+      verified_provider_version: "6.12.0"
+    tested_against_provider: ">=5.0.0,<7.0.0"
+    permissions:
+      plan: [storage.buckets.getIamPolicy]
+      create: [storage.buckets.setIamPolicy]
+    conditionals:
+      - when: {}
+        permissions:
+          update: [storage.buckets.setIamPolicy]
+`,
+			wantSubs: []string{
+				"iam_bindings/google_storage_bucket_iam_binding",
+				"conditionals[0]",
+				"when clause must have at least one predicate",
+			},
+		},
+		{
 			name: "data source conditional adds no permissions",
 			yaml: `
 data_sources:
