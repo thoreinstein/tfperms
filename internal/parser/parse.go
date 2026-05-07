@@ -107,6 +107,9 @@ type Resource struct {
 //     cannot be resolved statically result in cty.NilVal.
 //   - File is the source file path.
 //   - Line is the line number where the `module` block begins.
+//   - ModulePath is the instantiation path from the root configuration to
+//     this module call, expressed as the sequence of parent module names.
+//     It is nil/empty for root-level module blocks.
 type ModuleCall struct {
 	Name       string
 	Source     string
@@ -704,16 +707,28 @@ func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache ma
 		tmpl.diags = append(tmpl.diags, childTmpl.diags...)
 	}
 
-	// Maintain deterministic output sorted by File and Line.
-	sort.SliceStable(tmpl.modules, func(i, j int) bool {
-		if tmpl.modules[i].File != tmpl.modules[j].File {
-			return tmpl.modules[i].File < tmpl.modules[j].File
+	// Maintain deterministic output sorted by File, then Line, then
+	// ModulePath (joined as the instantiation path).
+	decorated := make([]struct {
+		mc      ModuleCall
+		pathKey string
+	}, len(tmpl.modules))
+	for i, mc := range tmpl.modules {
+		decorated[i].mc = mc
+		decorated[i].pathKey = strings.Join(mc.ModulePath, "/")
+	}
+	sort.SliceStable(decorated, func(i, j int) bool {
+		if decorated[i].mc.File != decorated[j].mc.File {
+			return decorated[i].mc.File < decorated[j].mc.File
 		}
-		if tmpl.modules[i].Line != tmpl.modules[j].Line {
-			return tmpl.modules[i].Line < tmpl.modules[j].Line
+		if decorated[i].mc.Line != decorated[j].mc.Line {
+			return decorated[i].mc.Line < decorated[j].mc.Line
 		}
-		return strings.Join(tmpl.modules[i].ModulePath, "/") < strings.Join(tmpl.modules[j].ModulePath, "/")
+		return decorated[i].pathKey < decorated[j].pathKey
 	})
+	for i := range decorated {
+		tmpl.modules[i] = decorated[i].mc
+	}
 
 	cache[cacheKey] = tmpl
 	return tmpl, nil, nil
