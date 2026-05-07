@@ -27,6 +27,7 @@ package reporter
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/thoreinstein/tfperms/internal/resolver"
 )
@@ -99,11 +100,15 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 	ew := &errWriter{w: w}
 
 	fmt.Fprintf(ew,
-		"%d permissions for %d resources, %d unknowns, %d unresolved conditionals\n",
+		"%d %s for %d %s, %d %s, %d %s\n",
 		len(res.TotalApplyPerms),
+		plural(len(res.TotalApplyPerms), "permission", "permissions"),
 		resourceCount,
+		plural(resourceCount, "resource", "resources"),
 		len(res.Unknowns),
+		plural(len(res.Unknowns), "unknown", "unknowns"),
 		len(res.Unresolved),
+		plural(len(res.Unresolved), "unresolved conditional", "unresolved conditionals"),
 	)
 
 	if len(res.PlanPerms) > 0 {
@@ -134,8 +139,8 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		fmt.Fprintln(ew)
 		fmt.Fprintf(ew, "unresolved conditionals (%d):\n", len(res.Unresolved))
 		for _, u := range res.Unresolved {
-			fmt.Fprintf(ew, "  %s.%s: %s (%s:%d) — %s\n",
-				u.ResourceType, u.ResourceName, u.Attribute, u.File, u.Line, u.Reason)
+			fmt.Fprintf(ew, "  %s%s.%s: %s (%s:%d) — %s\n",
+				modulePrefix(u.ModulePath), u.ResourceType, u.ResourceName, u.Attribute, u.File, u.Line, u.Reason)
 		}
 	}
 
@@ -143,6 +148,34 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		return fmt.Errorf("write report: %w", ew.err)
 	}
 	return nil
+}
+
+// plural picks singular when n == 1 and plural otherwise. Kept local
+// to the reporter because this is the only place we need
+// quantity-aware noun selection — a shared helper would invert the
+// dependency direction for a five-line function.
+func plural(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
+}
+
+// modulePrefix renders an UnresolvedConditional.ModulePath as the
+// `module.a.module.b.` prefix used elsewhere in the codebase to
+// disambiguate reused-module instantiations. An empty path yields the
+// empty string so the caller can unconditionally concatenate.
+func modulePrefix(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, name := range path {
+		b.WriteString("module.")
+		b.WriteString(name)
+		b.WriteByte('.')
+	}
+	return b.String()
 }
 
 // errWriter is an io.Writer adapter that latches the first underlying
