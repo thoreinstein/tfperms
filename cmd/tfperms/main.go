@@ -68,6 +68,10 @@ func newRootCmd() *cobra.Command {
 		// the actual error. See newRootCmd's doc comment for the
 		// trade-off.
 		SilenceUsage: true,
+		// SilenceErrors prevents cobra from printing the returned
+		// error to stderr. main() is the single layer that prints
+		// the error; without this, the message would appear twice.
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := rootDefaultDir
 			if len(args) == 1 {

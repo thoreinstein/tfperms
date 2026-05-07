@@ -199,6 +199,47 @@ resource "google_made_up_thing" "x" {
 	}
 }
 
+// TestRootCommandZeroArgsDefaultsToCwd exercises the bare-`tfperms`
+// invocation path: when no positional argument is supplied, the root
+// command falls through to rootDefaultDir ("."), which the parser
+// resolves against the process's current working directory. The wiring
+// test in TestRootCommandRunsPipeline only proves the explicit-path
+// branch; this test pins the no-arg branch by chdir'ing into a fixture
+// directory and executing the root command with an empty args slice.
+func TestRootCommandZeroArgsDefaultsToCwd(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+	t.Chdir(dir)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	summary, _, ok := strings.Cut(got, "\n")
+	if !ok {
+		t.Fatalf("output has no summary line; got:\n%s", got)
+	}
+	if !strings.Contains(summary, "for 1 resource") {
+		t.Errorf("summary line missing %q; got: %q", "for 1 resource", summary)
+	}
+	if !strings.Contains(got, "  storage.buckets.") {
+		t.Errorf("output missing any storage.buckets.* permission row.\noutput:\n%s", got)
+	}
+}
+
 // TestRootCommandRejectsExtraArgs guards the cobra.MaximumNArgs(1)
 // constraint. Two positional arguments must fail at parse time so the
 // help text and the implemented surface stay aligned — accepting more
