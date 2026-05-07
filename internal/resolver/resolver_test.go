@@ -652,6 +652,203 @@ func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
 
+// TestResolvePreventDestroyMultiInstance pins the cross-instance
+// behaviour of `lifecycle { prevent_destroy = true }` when multiple
+// resources of the same Terraform type appear in the same configuration.
+//
+// Resolve accumulates every resource's contributions into a single
+// shared `apply` map keyed by permission string; the map is consumed
+// once at the end of the loop to produce ApplyOnlyPerms /
+// TotalApplyPerms. A consequence of that shape is a logical-OR over
+// the per-instance prevent_destroy flag: a type's Delete permissions
+// appear in the apply sets iff *at least one* instance of that type
+// has PreventDestroy=false. They are suppressed iff *every* instance
+// of the type opts out of destroy. That is exactly what the spec
+// asks for — Terraform's `terraform apply` against the bucket whose
+// destroy is allowed must still hold the delete permission, so the
+// per-type union is the right granularity for the SA's permission
+// set.
+//
+// The previous tests pinned the single-instance behaviour. This test
+// pins the multi-instance behaviour explicitly so a future refactor
+// that, say, switches the apply map to a per-instance slice of
+// permission sets cannot quietly regress the OR semantics. Each
+// subtest stands alone — they construct fresh catalogs and resource
+// lists rather than sharing state — so a failure points at the
+// specific scenario without test-ordering ambiguity.
+func TestResolvePreventDestroyMultiInstance(t *testing.T) {
+	// One instance protected, one unprotected: the unprotected
+	// instance's iteration is what populates Delete in the shared
+	// apply map, so Delete must appear in the apply sets even though
+	// a sibling resource of the same type has prevent_destroy set.
+	t.Run("mixed_protection_includes_delete", func(t *testing.T) {
+		cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+		res := Resolve([]parser.Resource{
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "protected",
+				PreventDestroy: true,
+			},
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "unprotected",
+				PreventDestroy: false,
+			},
+		}, cat)
+
+		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+		// Delete is present because the unprotected instance contributes it.
+		assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
+			"storage.buckets.create",
+			"storage.buckets.delete",
+			"storage.buckets.update",
+		})
+		assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, []string{
+			"storage.buckets.create",
+			"storage.buckets.delete",
+			"storage.buckets.get",
+			"storage.buckets.update",
+		})
+		assertUnresolvedEqual(t, res.Unresolved, nil)
+	})
+
+	// Every instance of the type is protected: Delete must be
+	// suppressed everywhere because no iteration adds it to the
+	// shared apply map. This is the only configuration in which
+	// prevent_destroy actually removes Delete from the SA's
+	// permission set under multi-instance.
+	t.Run("all_protected_excludes_delete", func(t *testing.T) {
+		cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+		res := Resolve([]parser.Resource{
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "primary",
+				PreventDestroy: true,
+			},
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "secondary",
+				PreventDestroy: true,
+			},
+		}, cat)
+
+		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+		// storage.buckets.delete must NOT appear in either apply set.
+		assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
+			"storage.buckets.create",
+			"storage.buckets.update",
+		})
+		assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, []string{
+			"storage.buckets.create",
+			"storage.buckets.get",
+			"storage.buckets.update",
+		})
+		assertUnresolvedEqual(t, res.Unresolved, nil)
+	})
+
+	// Conditional sibling of mixed_protection_includes_delete: a
+	// fired conditional that contributes a distinctive Delete-only
+	// permission must still surface that permission when at least
+	// one instance is unprotected. The conditional fires on both
+	// instances (their attributes match), so the per-instance
+	// contribution is asymmetric: the protected instance does NOT
+	// add the conditional Delete, the unprotected instance DOES.
+	// The shared map collapses that asymmetry into "permission is
+	// present", which is the OR property we want.
+	t.Run("conditional_mixed_protection_includes_delete", func(t *testing.T) {
+		cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+			When: map[string]any{"uniform_bucket_level_access": true},
+			Permissions: catalog.PermissionSet{
+				// Distinctive Delete-only perm so a leak / suppression
+				// regression is unambiguous.
+				Delete: []string{"storage.buckets.deleteIamPolicy"},
+			},
+		}})
+
+		res := Resolve([]parser.Resource{
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "protected",
+				PreventDestroy: true,
+				Attrs: map[string]cty.Value{
+					"uniform_bucket_level_access": cty.True,
+				},
+			},
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "unprotected",
+				PreventDestroy: false,
+				Attrs: map[string]cty.Value{
+					"uniform_bucket_level_access": cty.True,
+				},
+			},
+		}, cat)
+
+		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+		// Both Delete sources surface: base storage.buckets.delete
+		// from the unprotected instance's base PermissionSet, and
+		// storage.buckets.deleteIamPolicy from the unprotected
+		// instance's fired conditional.
+		assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
+			"storage.buckets.create",
+			"storage.buckets.delete",
+			"storage.buckets.deleteIamPolicy",
+			"storage.buckets.update",
+		})
+		assertUnresolvedEqual(t, res.Unresolved, nil)
+	})
+
+	// Conditional sibling of all_protected_excludes_delete: both
+	// instances are protected AND both fire the conditional. Neither
+	// the base nor the conditional Delete must appear, because no
+	// iteration's `if !r.PreventDestroy` guard opens.
+	t.Run("conditional_all_protected_excludes_delete", func(t *testing.T) {
+		cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+			When: map[string]any{"uniform_bucket_level_access": true},
+			Permissions: catalog.PermissionSet{
+				Delete: []string{"storage.buckets.deleteIamPolicy"},
+			},
+		}})
+
+		res := Resolve([]parser.Resource{
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "primary",
+				PreventDestroy: true,
+				Attrs: map[string]cty.Value{
+					"uniform_bucket_level_access": cty.True,
+				},
+			},
+			{
+				Kind:           "resource",
+				Type:           "google_storage_bucket",
+				Name:           "secondary",
+				PreventDestroy: true,
+				Attrs: map[string]cty.Value{
+					"uniform_bucket_level_access": cty.True,
+				},
+			},
+		}, cat)
+
+		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+		// Both Delete sources must be suppressed.
+		assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
+			"storage.buckets.create",
+			"storage.buckets.update",
+		})
+		assertUnresolvedEqual(t, res.Unresolved, nil)
+	})
+}
+
 // TestResolveThreeSetPartition pins the three-set partition contract:
 // a permission appearing in BOTH the entry's Plan list (refresh) AND
 // its Update list (apply) must surface in PlanPerms and TotalApplyPerms
