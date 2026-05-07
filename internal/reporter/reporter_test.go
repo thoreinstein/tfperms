@@ -71,7 +71,7 @@ func TestRenderFull(t *testing.T) {
 	// Summary line: must be the first line. Anchor on a leading prefix
 	// + count so a regression that flips the format ("17 resources for
 	// 5 permissions, ...") fails loudly.
-	if !strings.HasPrefix(got, "5 permissions for 17 resources, 1 unknowns, 1 unresolved conditionals\n") {
+	if !strings.HasPrefix(got, "5 permissions for 17 resources, 1 unknown, 1 unresolved conditional\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 
@@ -152,7 +152,7 @@ func TestRenderCollapsed(t *testing.T) {
 	// The summary line still surfaces the zero diagnostic counts so
 	// a downstream consumer can detect "clean run" without parsing
 	// the body.
-	if !strings.HasPrefix(got, "2 permissions for 1 resources, 0 unknowns, 0 unresolved conditionals\n") {
+	if !strings.HasPrefix(got, "2 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 
@@ -193,6 +193,93 @@ func TestRenderMinimal(t *testing.T) {
 	want := "0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals\n"
 	if got != want {
 		t.Errorf("minimal output mismatch\n--- want ---\n%q\n--- got ---\n%q", want, got)
+	}
+}
+
+// TestRenderUnresolvedWithModulePath pins the contract that
+// UnresolvedConditional.ModulePath is rendered as the
+// `module.<a>.module.<b>.` prefix used elsewhere to disambiguate
+// reused-module instantiations. Without the prefix, two unresolved
+// conditionals with the same ResourceType.ResourceName but differing
+// module paths would render as identical lines, leaving the user
+// unable to locate the right call site.
+func TestRenderUnresolvedWithModulePath(t *testing.T) {
+	res := resolver.Result{
+		Unresolved: []resolver.UnresolvedConditional{
+			{
+				ResourceType: "google_storage_bucket",
+				ResourceName: "x",
+				ModulePath:   []string{"a", "b"},
+				Attribute:    "uniform_bucket_level_access",
+				Reason:       "missing_variable",
+				File:         "main.tf",
+				Line:         14,
+			},
+			// Same ResourceType.ResourceName as the first entry but
+			// a different ModulePath — the rendered lines must
+			// differ so users can tell the two call sites apart.
+			{
+				ResourceType: "google_storage_bucket",
+				ResourceName: "x",
+				ModulePath:   []string{"c"},
+				Attribute:    "uniform_bucket_level_access",
+				Reason:       "missing_variable",
+				File:         "main.tf",
+				Line:         14,
+			},
+			// Empty ModulePath — must render without the
+			// `module.` prefix so root-level resources keep their
+			// existing format.
+			{
+				ResourceType: "google_storage_bucket",
+				ResourceName: "y",
+				Attribute:    "uniform_bucket_level_access",
+				Reason:       "missing_variable",
+				File:         "main.tf",
+				Line:         20,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(&buf, res, 0); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	got := buf.String()
+
+	wantRows := []string{
+		"  module.a.module.b.google_storage_bucket.x: uniform_bucket_level_access (main.tf:14) — missing_variable",
+		"  module.c.google_storage_bucket.x: uniform_bucket_level_access (main.tf:14) — missing_variable",
+		"  google_storage_bucket.y: uniform_bucket_level_access (main.tf:20) — missing_variable",
+	}
+	for _, row := range wantRows {
+		if !strings.Contains(got, row) {
+			t.Errorf("output missing row %q.\noutput:\n%s", row, got)
+		}
+	}
+}
+
+// TestRenderSummarySingular pins the singular noun form for the
+// 1-of-each case. The plural helper picks "permission"/"resource"/
+// "unknown"/"unresolved conditional" when the count is exactly 1, so
+// the default CLI output reads correctly in the common 1-resource case.
+func TestRenderSummarySingular(t *testing.T) {
+	res := resolver.Result{
+		PlanPerms:       []string{"storage.buckets.get"},
+		ApplyOnlyPerms:  []string{},
+		TotalApplyPerms: []string{"storage.buckets.get"},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(&buf, res, 1); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	got := buf.String()
+	want := "1 permission for 1 resource, 0 unknowns, 0 unresolved conditionals\n"
+	if !strings.HasPrefix(got, want) {
+		t.Errorf("singular summary line wrong\n--- want prefix ---\n%q\n--- got ---\n%q", want, got)
 	}
 }
 

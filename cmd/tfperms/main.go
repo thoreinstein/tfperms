@@ -43,11 +43,13 @@ const rootDefaultDir = "."
 //   - Pipeline: parser.LoadRecursive(dir) → catalog.Load() →
 //     resolver.Resolve(...) → reporter.Render(stdout, ...).
 //
-// Errors at any stage propagate to cobra. SilenceUsage is set so the
-// trailing usage block is suppressed for runtime errors (parse
-// failures, missing catalog files, broken stdout pipe) — usage is
-// only relevant for argument-shape mistakes, which cobra surfaces
-// before RunE runs.
+// Errors at any stage propagate to cobra. SilenceUsage: true
+// suppresses the trailing usage block on every error path — including
+// cobra's own Args validation errors (e.g. too many positional
+// arguments). The trade-off is deliberate: the help text is one
+// `tfperms --help` away, and printing it after every parse failure
+// or broken-pipe error buries the actual cause. Tests pin the
+// behaviour separately (TestRootCommandRejectsExtraArgs).
 //
 // The catalog and `version` subcommands remain as-is; this RunE
 // addition is the first time the root command itself is runnable.
@@ -60,10 +62,11 @@ func newRootCmd() *cobra.Command {
 		// MaximumNArgs(1) — zero or one positional. Zero means "use
 		// rootDefaultDir"; one means "this is the directory to analyse".
 		Args: cobra.MaximumNArgs(1),
-		// SilenceUsage matches the catalog subcommand tree: the
-		// trailing usage block is irrelevant once we are past argument
-		// parsing, and suppressing it keeps the user's eye on the
-		// actual error.
+		// SilenceUsage matches the catalog subcommand tree:
+		// suppressing the trailing usage block on every error
+		// (including cobra Args validation) keeps the user's eye on
+		// the actual error. See newRootCmd's doc comment for the
+		// trade-off.
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := rootDefaultDir
