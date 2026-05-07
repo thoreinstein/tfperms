@@ -114,6 +114,7 @@ type ModuleCall struct {
 	Args       map[string]cty.Value
 	File       string
 	Line       int
+	ModulePath []string
 }
 
 const (
@@ -477,9 +478,8 @@ type moduleTemplate struct {
 //     (in Parse's File:Line order), then for each local module call in
 //     source order, the recursively-loaded resources of that module.
 //   - []ModuleCall: every module block encountered during the walk,
-//     deduped by (File, Line) source position. Plain Parse already
-//     reports modules in File:Line order; recursive children are
-//     appended after their parent's modules.
+//     deduped by instantiation path and (File, Line) source position.
+//     The result is deterministically sorted by File, Line, and path.
 //   - hcl.Diagnostics: warning-severity entries from Parse plus
 //     warnings emitted at call sites that could not be loaded — missing
 //     directory, no .tf files, parse failure inside the child module,
@@ -615,13 +615,14 @@ func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache ma
 		diags:     append(hcl.Diagnostics(nil), diags...),
 	}
 
-	// Track which (File, Line) source positions we have already
-	// emitted a ModuleCall for, so cache reuse across multiple call
-	// sites of the same nested module does not produce duplicate
-	// entries in the final modules slice.
+	// Track which (ModulePath, File, Line) source positions we have
+	// already emitted a ModuleCall for, so cache reuse across
+	// multiple call sites of the same nested module does not produce
+	// duplicate entries in the final modules slice.
 	seenSites := make(map[string]bool, len(modules))
 	for _, m := range modules {
-		seenSites[fmt.Sprintf("%s:%d", m.File, m.Line)] = true
+		site := fmt.Sprintf("%s:%s:%d", strings.Join(m.ModulePath, "/"), m.File, m.Line)
+		seenSites[site] = true
 	}
 
 	for _, m := range modules {
@@ -687,15 +688,32 @@ func buildModuleTemplate(absDir string, overrides map[string]cty.Value, cache ma
 		// diagnostics so the root caller sees the union of every
 		// level's reporting.
 		for _, cm := range childTmpl.modules {
-			site := fmt.Sprintf("%s:%d", cm.File, cm.Line)
+			instanced := cm
+			newPath := make([]string, 0, len(cm.ModulePath)+1)
+			newPath = append(newPath, m.Name)
+			newPath = append(newPath, cm.ModulePath...)
+			instanced.ModulePath = newPath
+
+			site := fmt.Sprintf("%s:%s:%d", strings.Join(instanced.ModulePath, "/"), instanced.File, instanced.Line)
 			if seenSites[site] {
 				continue
 			}
 			seenSites[site] = true
-			tmpl.modules = append(tmpl.modules, cm)
+			tmpl.modules = append(tmpl.modules, instanced)
 		}
 		tmpl.diags = append(tmpl.diags, childTmpl.diags...)
 	}
+
+	// Maintain deterministic output sorted by File and Line.
+	sort.SliceStable(tmpl.modules, func(i, j int) bool {
+		if tmpl.modules[i].File != tmpl.modules[j].File {
+			return tmpl.modules[i].File < tmpl.modules[j].File
+		}
+		if tmpl.modules[i].Line != tmpl.modules[j].Line {
+			return tmpl.modules[i].Line < tmpl.modules[j].Line
+		}
+		return strings.Join(tmpl.modules[i].ModulePath, "/") < strings.Join(tmpl.modules[j].ModulePath, "/")
+	})
 
 	cache[cacheKey] = tmpl
 	return tmpl, nil, nil

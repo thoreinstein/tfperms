@@ -1,0 +1,130 @@
+{
+  "resources": [
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "b",
+      "file": "mod/main.tf",
+      "line": 3,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "bucket-a"
+        }
+      ],
+      "module_path": [
+        "m1"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "sub",
+      "file": "mod/sub/main.tf",
+      "line": 3,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "sub-bucket-a"
+        }
+      ],
+      "module_path": [
+        "m1",
+        "sub"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "b",
+      "file": "mod/main.tf",
+      "line": 3,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "bucket-b"
+        }
+      ],
+      "module_path": [
+        "m2"
+      ]
+    },
+    {
+      "kind": "resource",
+      "type": "google_storage_bucket",
+      "name": "sub",
+      "file": "mod/sub/main.tf",
+      "line": 3,
+      "attrs": [
+        {
+          "name": "name",
+          "value": "sub-bucket-b"
+        }
+      ],
+      "module_path": [
+        "m2",
+        "sub"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "name": "m1",
+      "source": "./mod",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 1,
+      "args": [
+        {
+          "name": "val",
+          "value": "a"
+        }
+      ]
+    },
+    {
+      "name": "m2",
+      "source": "./mod",
+      "source_kind": "local",
+      "file": "main.tf",
+      "line": 6,
+      "args": [
+        {
+          "name": "val",
+          "value": "b"
+        }
+      ]
+    },
+    {
+      "name": "sub",
+      "source": "./sub",
+      "source_kind": "local",
+      "file": "mod/main.tf",
+      "line": 7,
+      "args": [
+        {
+          "name": "val",
+          "value": "a"
+        }
+      ],
+      "module_path": [
+        "m1"
+      ]
+    },
+    {
+      "name": "sub",
+      "source": "./sub",
+      "source_kind": "local",
+      "file": "mod/main.tf",
+      "line": 7,
+      "args": [
+        {
+          "name": "val",
+          "value": "b"
+        }
+      ],
+      "module_path": [
+        "m2"
+      ]
+    }
+  ]
+}

@@ -69,6 +69,28 @@
   ],
   "modules": [
     {
+      "name": "common",
+      "source": "../shared",
+      "source_kind": "local",
+      "file": "a/main.tf",
+      "line": 1,
+      "args": [],
+      "module_path": [
+        "left"
+      ]
+    },
+    {
+      "name": "common",
+      "source": "../shared",
+      "source_kind": "local",
+      "file": "b/main.tf",
+      "line": 1,
+      "args": [],
+      "module_path": [
+        "right"
+      ]
+    },
+    {
       "name": "left",
       "source": "./a",
       "source_kind": "local",
@@ -82,22 +104,6 @@
       "source_kind": "local",
       "file": "main.tf",
       "line": 5,
-      "args": []
-    },
-    {
-      "name": "common",
-      "source": "../shared",
-      "source_kind": "local",
-      "file": "a/main.tf",
-      "line": 1,
-      "args": []
-    },
-    {
-      "name": "common",
-      "source": "../shared",
-      "source_kind": "local",
-      "file": "b/main.tf",
-      "line": 1,
       "args": []
     }
   ]

@@ -36,18 +36,21 @@
   ],
   "modules": [
     {
-      "name": "a",
-      "source": "./a",
-      "source_kind": "local",
-      "file": "main.tf",
-      "line": 1,
-      "args": []
-    },
-    {
       "name": "b",
       "source": "./b",
       "source_kind": "local",
       "file": "a/main.tf",
+      "line": 1,
+      "args": [],
+      "module_path": [
+        "a"
+      ]
+    },
+    {
+      "name": "a",
+      "source": "./a",
+      "source_kind": "local",
+      "file": "main.tf",
       "line": 1,
       "args": []
     }
