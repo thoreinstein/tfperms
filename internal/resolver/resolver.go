@@ -213,108 +213,40 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 	unresolved := make(map[unresolvedRecordKey]unresolvedRecordValue)
 
 	for _, r := range resources {
-		switch r.Kind {
-		case "resource":
-			if entry := lookupResource(cat, r.Type); entry != nil {
-				addAll(plan, entry.Permissions.Plan)
-				addAll(apply, entry.Permissions.Create)
-				addAll(apply, entry.Permissions.Update)
-				if !r.PreventDestroy {
-					addAll(apply, entry.Permissions.Delete)
-				}
-				for _, cond := range entry.Conditionals {
-					matched, missing := matchesConditional(r.Attrs, cond.When)
-					if matched {
-						addAll(plan, cond.Permissions.Plan)
-						addAll(apply, cond.Permissions.Create)
-						addAll(apply, cond.Permissions.Update)
-						if !r.PreventDestroy {
-							addAll(apply, cond.Permissions.Delete)
-						}
-					}
-					for _, attr := range missing {
-						key := unresolvedRecordKey{
-							ResourceType:  r.Type,
-							ResourceName:  r.Name,
-							ModulePathKey: encodeModulePath(r.ModulePath),
-							Attribute:     attr,
-							File:          r.File,
-							Line:          r.Line,
-						}
-						unresolved[key] = unresolvedRecordValue{
-							ModulePath: cloneModulePath(r.ModulePath),
-							Reason:     unresolvedReasonFor(r, attr),
-						}
-					}
-				}
-				continue
-			}
-			if entry := lookupIAMBinding(cat, r.Type); entry != nil {
-				addAll(plan, entry.Permissions.Plan)
-				addAll(apply, entry.Permissions.Create)
-				addAll(apply, entry.Permissions.Update)
-				if !r.PreventDestroy {
-					addAll(apply, entry.Permissions.Delete)
-				}
-				for _, cond := range entry.Conditionals {
-					matched, missing := matchesConditional(r.Attrs, cond.When)
-					if matched {
-						addAll(plan, cond.Permissions.Plan)
-						addAll(apply, cond.Permissions.Create)
-						addAll(apply, cond.Permissions.Update)
-						if !r.PreventDestroy {
-							addAll(apply, cond.Permissions.Delete)
-						}
-					}
-					for _, attr := range missing {
-						key := unresolvedRecordKey{
-							ResourceType:  r.Type,
-							ResourceName:  r.Name,
-							ModulePathKey: encodeModulePath(r.ModulePath),
-							Attribute:     attr,
-							File:          r.File,
-							Line:          r.Line,
-						}
-						unresolved[key] = unresolvedRecordValue{
-							ModulePath: cloneModulePath(r.ModulePath),
-							Reason:     unresolvedReasonFor(r, attr),
-						}
-					}
-				}
-				continue
-			}
-			unknowns[unknownKey{Type: r.Type, File: r.File, Line: r.Line}] = struct{}{}
-		case "data":
-			if entry := lookupDataSource(cat, r.Type); entry != nil {
-				addAll(plan, entry.Permissions.Plan)
-				for _, cond := range entry.Conditionals {
-					matched, missing := matchesConditional(r.Attrs, cond.When)
-					if matched {
-						addAll(plan, cond.Permissions.Plan)
-					}
-					for _, attr := range missing {
-						key := unresolvedRecordKey{
-							ResourceType:  r.Type,
-							ResourceName:  r.Name,
-							ModulePathKey: encodeModulePath(r.ModulePath),
-							Attribute:     attr,
-							File:          r.File,
-							Line:          r.Line,
-						}
-						unresolved[key] = unresolvedRecordValue{
-							ModulePath: cloneModulePath(r.ModulePath),
-							Reason:     unresolvedReasonFor(r, attr),
-						}
-					}
-				}
-				continue
-			}
-			unknowns[unknownKey{Type: r.Type, File: r.File, Line: r.Line}] = struct{}{}
+		// Skip kinds the parser does not emit. The parser's contract
+		// guarantees Kind is "resource" or "data" for every Resource,
+		// so this branch is defensive only — and crucially, we must
+		// not surface an Unknown for a kind we do not understand,
+		// since the catalog never claimed to map it.
+		if r.Kind != "resource" && r.Kind != "data" {
+			continue
 		}
-		// Unknown Kind (neither "resource" nor "data") is silently
-		// ignored. The parser's contract guarantees Kind is one of
-		// these two for every Resource it emits, so this branch is
-		// defensive only.
+		entry, found := lookupEntry(cat, r)
+		if !found {
+			unknowns[unknownKey{Type: r.Type, File: r.File, Line: r.Line}] = struct{}{}
+			continue
+		}
+		applyPermissionSet(plan, apply, entry.base, r.PreventDestroy)
+		for _, cond := range entry.conditionals {
+			matched, missing := matchesConditional(r.Attrs, cond.when)
+			if matched {
+				applyPermissionSet(plan, apply, cond.permissions, r.PreventDestroy)
+			}
+			for _, attr := range missing {
+				key := unresolvedRecordKey{
+					ResourceType:  r.Type,
+					ResourceName:  r.Name,
+					ModulePathKey: encodeModulePath(r.ModulePath),
+					Attribute:     attr,
+					File:          r.File,
+					Line:          r.Line,
+				}
+				unresolved[key] = unresolvedRecordValue{
+					ModulePath: cloneModulePath(r.ModulePath),
+					Reason:     unresolvedReasonFor(r, attr),
+				}
+			}
+		}
 	}
 
 	planPerms := sortedSet(plan)
@@ -327,6 +259,139 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 		TotalApplyPerms: totalApplyPerms,
 		Unknowns:        sortedUnknowns(unknowns),
 		Unresolved:      sortedUnresolved(unresolved),
+	}
+}
+
+// resolvedEntry is the kind-agnostic projection of a catalog entry the
+// Resolve loop operates on. Unifying ResourceEntry, IAMBindingEntry, and
+// DataSourceEntry into a single shape lets the loop apply base
+// permissions and iterate conditionals once instead of three times.
+//
+// For resource and IAM-binding entries, base mirrors the entry's
+// PermissionSet directly. For data-source entries, only base.Plan is
+// populated — Create/Update/Delete are deliberately left nil so the
+// shared loop applies no apply-stage permissions for `data` blocks. The
+// same projection rule applies to conditionals: a DataSourceConditional
+// projects with permissions.Plan populated and the write-stage slices
+// nil, preserving the read-only semantics that the catalog type system
+// previously enforced via the distinct DataSourcePermissions shape.
+type resolvedEntry struct {
+	base         catalog.PermissionSet
+	conditionals []resolvedConditional
+}
+
+// resolvedConditional is the kind-agnostic projection of a Conditional
+// or DataSourceConditional. The projection rule for `permissions`
+// matches resolvedEntry.base — write-stage slices are zeroed for
+// data-source conditionals.
+type resolvedConditional struct {
+	when        map[string]any
+	permissions catalog.PermissionSet
+}
+
+// lookupEntry returns the kind-agnostic projection of the catalog entry
+// that matches r, plus a bool indicating whether any entry was found.
+//
+// For r.Kind == "resource" the lookup tries Catalog.Resources first and
+// falls back to Catalog.IAMBindings, matching the precedence the
+// previous switch-based implementation enforced (see the package doc):
+// IAM-binding types are syntactically `resource` blocks in HCL, so they
+// could collide with a hypothetical Resources entry of the same name —
+// in which case the Resources entry wins. The catalog validator
+// independently prevents that collision from arising, but the
+// precedence is preserved here as a defence-in-depth measure.
+//
+// For r.Kind == "data" the lookup consults Catalog.DataSources only;
+// the projection zeroes the Create / Update / Delete slices on both the
+// base permissions and every conditional so the shared Resolve loop
+// cannot accidentally union write-stage permissions for a read-only
+// block. This is the explicit data-source-CRUD-leak guard called out in
+// the refactor plan.
+//
+// Other kinds return (resolvedEntry{}, false). Resolve treats `found ==
+// false` for an entry it knows it should have understood (resource or
+// data) as an unknown-resource diagnostic; kinds outside that pair are
+// filtered out by Resolve before this is called.
+func lookupEntry(cat *catalog.Catalog, r parser.Resource) (resolvedEntry, bool) {
+	if cat == nil {
+		return resolvedEntry{}, false
+	}
+	switch r.Kind {
+	case "resource":
+		if entry := cat.Resources[r.Type]; entry != nil {
+			return resolvedEntry{
+				base:         entry.Permissions,
+				conditionals: projectConditionals(entry.Conditionals),
+			}, true
+		}
+		if entry := cat.IAMBindings[r.Type]; entry != nil {
+			return resolvedEntry{
+				base:         entry.Permissions,
+				conditionals: projectConditionals(entry.Conditionals),
+			}, true
+		}
+	case "data":
+		if entry := cat.DataSources[r.Type]; entry != nil {
+			return resolvedEntry{
+				base:         catalog.PermissionSet{Plan: entry.Permissions.Plan},
+				conditionals: projectDataSourceConditionals(entry.Conditionals),
+			}, true
+		}
+	}
+	return resolvedEntry{}, false
+}
+
+// projectConditionals lifts a slice of catalog.Conditional into the
+// resolver's kind-agnostic representation. The base PermissionSet is
+// preserved verbatim — resource and IAM-binding conditionals have full
+// Create/Update/Delete semantics.
+func projectConditionals(conds []catalog.Conditional) []resolvedConditional {
+	if len(conds) == 0 {
+		return nil
+	}
+	out := make([]resolvedConditional, len(conds))
+	for i, cond := range conds {
+		out[i] = resolvedConditional{
+			when:        cond.When,
+			permissions: cond.Permissions,
+		}
+	}
+	return out
+}
+
+// projectDataSourceConditionals is the data-source counterpart to
+// projectConditionals. It explicitly populates only PermissionSet.Plan
+// from DataSourcePermissions.Plan so the shared Resolve loop sees nil
+// Create/Update/Delete slices and contributes no write-stage
+// permissions for a read-only block. This is the type-system bridge
+// between catalog.DataSourcePermissions (Plan-only) and
+// catalog.PermissionSet (the resolver's working shape).
+func projectDataSourceConditionals(conds []catalog.DataSourceConditional) []resolvedConditional {
+	if len(conds) == 0 {
+		return nil
+	}
+	out := make([]resolvedConditional, len(conds))
+	for i, cond := range conds {
+		out[i] = resolvedConditional{
+			when:        cond.When,
+			permissions: catalog.PermissionSet{Plan: cond.Permissions.Plan},
+		}
+	}
+	return out
+}
+
+// applyPermissionSet unions perms into the running plan/apply sets per
+// the Epic 5 stage rules: Plan goes to the plan map; Create / Update
+// always go to the apply map; Delete is suppressed when preventDestroy
+// is set. Centralising the four addAll calls keeps base-permission and
+// conditional-permission application in lockstep — a future stage
+// addition has exactly one place to update.
+func applyPermissionSet(plan, apply map[string]struct{}, perms catalog.PermissionSet, preventDestroy bool) {
+	addAll(plan, perms.Plan)
+	addAll(apply, perms.Create)
+	addAll(apply, perms.Update)
+	if !preventDestroy {
+		addAll(apply, perms.Delete)
 	}
 }
 
@@ -422,37 +487,6 @@ func cloneModulePath(path []string) []string {
 	out := make([]string, len(path))
 	copy(out, path)
 	return out
-}
-
-// lookupResource returns the catalog entry for a `resource` block type,
-// or nil if cat is nil or the type is not in cat.Resources.
-func lookupResource(cat *catalog.Catalog, typ string) *catalog.ResourceEntry {
-	if cat == nil {
-		return nil
-	}
-	return cat.Resources[typ]
-}
-
-// lookupDataSource returns the catalog entry for a `data` block type,
-// or nil if cat is nil or the type is not in cat.DataSources.
-func lookupDataSource(cat *catalog.Catalog, typ string) *catalog.DataSourceEntry {
-	if cat == nil {
-		return nil
-	}
-	return cat.DataSources[typ]
-}
-
-// lookupIAMBinding returns the catalog entry for an IAM binding block
-// type, or nil if cat is nil or the type is not in cat.IAMBindings.
-// IAM binding entries are checked after Resources because their HCL
-// block kind is also `resource`; a hypothetical type registered under
-// both sections would resolve as a Resource, which the validator
-// already prevents.
-func lookupIAMBinding(cat *catalog.Catalog, typ string) *catalog.IAMBindingEntry {
-	if cat == nil {
-		return nil
-	}
-	return cat.IAMBindings[typ]
 }
 
 // matchesConditional evaluates a Conditional / DataSourceConditional
