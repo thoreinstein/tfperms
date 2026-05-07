@@ -81,6 +81,10 @@ type goldenMod struct {
 	File       string       `json:"file"`
 	Line       int          `json:"line"`
 	Args       []goldenAttr `json:"args"`
+	// ModulePath is omitted when empty so root-level module calls
+	// (the majority of fixtures) keep their pre-recursion goldens
+	// byte-identical.
+	ModulePath []string `json:"module_path,omitempty"`
 }
 
 // goldenDiag is the serialised projection of a single hcl.Diagnostic.
@@ -300,6 +304,7 @@ func projectModule(m ModuleCall, absDir string) goldenMod {
 		File:       relativisePath(m.File, absDir),
 		Line:       m.Line,
 		Args:       projectAttrs(m.Args),
+		ModulePath: m.ModulePath,
 	}
 }
 

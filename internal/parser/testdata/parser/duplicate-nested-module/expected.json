@@ -58,7 +58,21 @@
       "source_kind": "local",
       "file": "p/main.tf",
       "line": 1,
-      "args": []
+      "args": [],
+      "module_path": [
+        "p1"
+      ]
+    },
+    {
+      "name": "leaf",
+      "source": "./leaf",
+      "source_kind": "local",
+      "file": "p/main.tf",
+      "line": 1,
+      "args": [],
+      "module_path": [
+        "p2"
+      ]
     }
   ]
 }

@@ -58,7 +58,10 @@
       "source_kind": "local",
       "file": "mod-a/main.tf",
       "line": 1,
-      "args": []
+      "args": [],
+      "module_path": [
+        "a"
+      ]
     },
     {
       "name": "shared",
@@ -66,7 +69,10 @@
       "source_kind": "local",
       "file": "mod-b/main.tf",
       "line": 1,
-      "args": []
+      "args": [],
+      "module_path": [
+        "b"
+      ]
     }
   ]
 }
