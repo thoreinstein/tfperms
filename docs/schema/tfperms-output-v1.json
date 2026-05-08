@@ -122,14 +122,11 @@
     },
     "metadata": {
       "type": "object",
-      "required": ["tfperms_version", "generated_at"],
+      "required": ["tfperms_version"],
       "properties": {
-        "tfperms_version": { "type": "string" },
-        "generated_at": {
-          "type": "string",
-          "format": "date-time"
-        }
-      }
+        "tfperms_version": { "type": "string" }
+      },
+      "description": "Build-stable metadata. v1.0 deliberately omits a generated_at timestamp because the format guarantees bit-identical output for identical inputs (see docs/json-schema.md), and a wall-clock timestamp would defeat that guarantee."
     }
   }
 }

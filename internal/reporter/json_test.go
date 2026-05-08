@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/thoreinstein/tfperms/internal/resolver"
 )
 
 func TestRenderJSON(t *testing.T) {
-	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	res := resolver.Result{
 		PlanPerms:      []string{"storage.buckets.get"},
 		ApplyOnlyPerms: []string{"storage.buckets.create"},
@@ -53,7 +51,7 @@ func TestRenderJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := RenderJSON(&buf, res, 1, "1.2.3", now)
+	err := RenderJSON(&buf, res, 1, "1.2.3")
 	if err != nil {
 		t.Fatalf("RenderJSON: %v", err)
 	}
@@ -107,11 +105,45 @@ func TestRenderJSON(t *testing.T) {
 		},
 		Metadata: jsonMetadata{
 			TFPermsVersion: "1.2.3",
-			GeneratedAt:    now,
 		},
 	}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("mismatch\ngot: %+v\nwant: %+v", got, want)
+	}
+}
+
+// TestRenderJSONDeterministic verifies that two RenderJSON calls on the
+// same input produce byte-identical output. This is the v1.0 stability
+// contract documented in docs/json-schema.md ("Identical inputs will
+// produce bit-identical JSON output, making it safe for diff usage in
+// CI/CD pipelines"). Regressions here — most plausibly someone adding a
+// time.Now() back into the metadata block — must fail this test.
+func TestRenderJSONDeterministic(t *testing.T) {
+	res := resolver.Result{
+		PlanPerms:       []string{"storage.buckets.get"},
+		ApplyOnlyPerms:  []string{"storage.buckets.create"},
+		TotalApplyPerms: []string{"storage.buckets.create", "storage.buckets.get"},
+		Resources: []resolver.ResourceResult{
+			{
+				Type:      "google_storage_bucket",
+				Name:      "data",
+				File:      "main.tf",
+				Line:      10,
+				BasePerms: []string{"storage.buckets.get"},
+			},
+		},
+	}
+
+	var first, second bytes.Buffer
+	if err := RenderJSON(&first, res, 1, "1.2.3"); err != nil {
+		t.Fatalf("first RenderJSON: %v", err)
+	}
+	if err := RenderJSON(&second, res, 1, "1.2.3"); err != nil {
+		t.Fatalf("second RenderJSON: %v", err)
+	}
+	if !bytes.Equal(first.Bytes(), second.Bytes()) {
+		t.Errorf("RenderJSON not deterministic across runs.\n--- first ---\n%s\n--- second ---\n%s",
+			first.String(), second.String())
 	}
 }

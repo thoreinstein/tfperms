@@ -36,7 +36,7 @@ The full JSON Schema is available at [`docs/schema/tfperms-output-v1.json`](sche
 *   `diagnostics`: Parse-level warnings (e.g., non-local module sources).
 *   `unknowns`: Terraform resources found in the configuration that are missing from the `tfperms` catalog.
 *   `unresolved_conditionals`: Catalog-defined conditionals that could not be evaluated due to missing variables or dynamic values.
-*   `metadata`: Information about the `tfperms` build and the generation timestamp.
+*   `metadata`: Build-stable metadata about the `tfperms` binary that produced the output. v1.0 contains only `tfperms_version`; no wall-clock timestamp is emitted because that would defeat the determinism guarantee above.
 
 ## Resource Attribution
 

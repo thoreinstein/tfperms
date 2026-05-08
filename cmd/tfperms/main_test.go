@@ -611,3 +611,46 @@ resource "google_storage_bucket" "primary" {
 		t.Errorf("unexpected resources: %+v", got.Resources)
 	}
 }
+
+// TestRootCommandJSONOutputDeterministic verifies the v1.0 stability
+// contract documented in docs/json-schema.md: identical inputs must
+// produce bit-identical JSON output across runs. This test exercises
+// the full CLI pipeline (cobra parse → newRootCmd → runAnalyze →
+// reporter.RenderJSON), so a regression at any layer that introduces
+// non-determinism — most plausibly a wall-clock timestamp leaking back
+// into the metadata block — must fail this test rather than slipping
+// past as a unit-level test that hardcodes a fixed time.
+func TestRootCommandJSONOutputDeterministic(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "a" {
+  name                        = "a"
+  location                    = "US"
+  uniform_bucket_level_access = true
+}
+
+resource "google_storage_bucket" "b" {
+  name                        = "b"
+  location                    = "US"
+  uniform_bucket_level_access = true
+}
+`)
+
+	run := func() []byte {
+		root := newRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetErr(out)
+		root.SetArgs([]string{dir, "--format=json"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+		}
+		return out.Bytes()
+	}
+
+	first := run()
+	second := run()
+	if !bytes.Equal(first, second) {
+		t.Errorf("JSON output not deterministic across runs.\n--- first ---\n%s\n--- second ---\n%s",
+			first, second)
+	}
+}

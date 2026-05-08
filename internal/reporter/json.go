@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/thoreinstein/tfperms/internal/resolver"
 )
@@ -44,8 +43,7 @@ type jsonResource struct {
 }
 
 type jsonMetadata struct {
-	TFPermsVersion string    `json:"tfperms_version"`
-	GeneratedAt    time.Time `json:"generated_at"`
+	TFPermsVersion string `json:"tfperms_version"`
 }
 
 // RenderJSON writes the stable JSON representation of res to w.
@@ -53,12 +51,15 @@ type jsonMetadata struct {
 // resourceCount is the number of distinct Terraform resources analysed,
 // matching Render's definition.
 //
-// version is the tfperms build version (main.version) and now is the
-// generation timestamp. Both flow into the `metadata` block.
+// version is the tfperms build version (main.version) and flows into
+// the `metadata` block.
 //
 // Canonicalize is called on entry so output is deterministic, including
-// all keys and array elements.
-func RenderJSON(w io.Writer, res resolver.Result, resourceCount int, version string, now time.Time) error {
+// all keys and array elements. The v1.0 contract guarantees bit-identical
+// output for identical inputs (see docs/json-schema.md), which is why
+// this signature deliberately takes no wall-clock timestamp: a
+// generated_at field would defeat the determinism guarantee.
+func RenderJSON(w io.Writer, res resolver.Result, resourceCount int, version string) error {
 	res = Canonicalize(res)
 
 	output := jsonOutput{
@@ -78,7 +79,6 @@ func RenderJSON(w io.Writer, res resolver.Result, resourceCount int, version str
 		UnresolvedConditionals: res.Unresolved,
 		Metadata: jsonMetadata{
 			TFPermsVersion: version,
-			GeneratedAt:    now.UTC(),
 		},
 	}
 
