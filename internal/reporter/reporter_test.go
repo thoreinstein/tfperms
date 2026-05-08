@@ -47,7 +47,7 @@ func TestRenderFull(t *testing.T) {
 			"storage.buckets.get",
 		},
 		Unknowns: []resolver.UnknownResource{
-			{Type: "google_dataplex_lake", File: "main.tf", Line: 42},
+			{Type: "google_dataplex_lake", Name: "primary", File: "main.tf", Line: 42},
 		},
 		Unresolved: []resolver.UnresolvedConditional{
 			{
@@ -71,16 +71,16 @@ func TestRenderFull(t *testing.T) {
 	// Summary line: must be the first line. Anchor on a leading prefix
 	// + count so a regression that flips the format ("17 resources for
 	// 5 permissions, ...") fails loudly.
-	if !strings.HasPrefix(got, "5 permissions for 17 resources, 1 unknown, 1 unresolved conditional, 0 warnings\n") {
+	if !strings.HasPrefix(got, "  5 permissions for 17 resources, 1 unknown, 1 unresolved conditional\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 
 	// Each section header carries its count.
 	wantHeaders := []string{
-		"plan permissions (2):",
-		"apply-only permissions (3):",
-		"unknown resources (1):",
-		"unresolved conditionals (1):",
+		"  plan permissions (2):",
+		"  apply-only permissions (3):",
+		"  unknown resources (1):",
+		"  unresolved conditionals (1):",
 	}
 	for _, h := range wantHeaders {
 		if !strings.Contains(got, h) {
@@ -88,18 +88,16 @@ func TestRenderFull(t *testing.T) {
 		}
 	}
 
-	// Each input row must appear verbatim. The two-space indent is
-	// part of the format contract — `grep -E '^  '` is a reasonable
-	// way to extract just the rows, so a regression that changes
-	// the indent is user-visible.
+	// Each input row must appear verbatim. The four-space indent is
+	// part of the format contract.
 	wantRows := []string{
-		"  bigquery.datasets.get",
-		"  storage.buckets.get",
-		"  bigquery.datasets.create",
-		"  storage.buckets.create",
-		"  storage.buckets.delete",
-		"  google_dataplex_lake (main.tf:42)",
-		"  google_storage_bucket.data: uniform_bucket_level_access (main.tf:14) — missing_variable",
+		"    bigquery.datasets.get",
+		"    storage.buckets.get",
+		"    bigquery.datasets.create",
+		"    storage.buckets.create",
+		"    storage.buckets.delete",
+		"    google_dataplex_lake.primary (main.tf:42)",
+		"    google_storage_bucket.data: uniform_bucket_level_access (main.tf:14) — missing_variable",
 	}
 	for _, r := range wantRows {
 		if !strings.Contains(got, r) {
@@ -152,15 +150,15 @@ func TestRenderCollapsed(t *testing.T) {
 	// The summary line still surfaces the zero diagnostic counts so
 	// a downstream consumer can detect "clean run" without parsing
 	// the body.
-	if !strings.HasPrefix(got, "2 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals, 0 warnings\n") {
+	if !strings.HasPrefix(got, "  2 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 
 	// Permission sections still render.
-	if !strings.Contains(got, "plan permissions (1):") {
+	if !strings.Contains(got, "  plan permissions (1):") {
 		t.Errorf("output missing plan section.\noutput:\n%s", got)
 	}
-	if !strings.Contains(got, "apply-only permissions (1):") {
+	if !strings.Contains(got, "  apply-only permissions (1):") {
 		t.Errorf("output missing apply-only section.\noutput:\n%s", got)
 	}
 }
@@ -190,7 +188,7 @@ func TestRenderMinimal(t *testing.T) {
 	}
 
 	got := buf.String()
-	want := "0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals, 0 warnings\n"
+	want := "  0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals\n"
 	if got != want {
 		t.Errorf("minimal output mismatch\n--- want ---\n%q\n--- got ---\n%q", want, got)
 	}
@@ -249,9 +247,9 @@ func TestRenderUnresolvedWithModulePath(t *testing.T) {
 	got := buf.String()
 
 	wantRows := []string{
-		"  module.a.module.b.google_storage_bucket.x: uniform_bucket_level_access (main.tf:14) — missing_variable",
-		"  module.c.google_storage_bucket.x: uniform_bucket_level_access (main.tf:14) — missing_variable",
-		"  google_storage_bucket.y: uniform_bucket_level_access (main.tf:20) — missing_variable",
+		"    module.a.module.b.google_storage_bucket.x: uniform_bucket_level_access (main.tf:14) — missing_variable",
+		"    module.c.google_storage_bucket.x: uniform_bucket_level_access (main.tf:14) — missing_variable",
+		"    google_storage_bucket.y: uniform_bucket_level_access (main.tf:20) — missing_variable",
 	}
 	for _, row := range wantRows {
 		if !strings.Contains(got, row) {
@@ -277,7 +275,7 @@ func TestRenderSummarySingular(t *testing.T) {
 	}
 
 	got := buf.String()
-	want := "1 permission for 1 resource, 0 unknowns, 0 unresolved conditionals, 0 warnings\n"
+	want := "  1 permission for 1 resource, 0 unknowns, 0 unresolved conditionals\n"
 	if !strings.HasPrefix(got, want) {
 		t.Errorf("singular summary line wrong\n--- want prefix ---\n%q\n--- got ---\n%q", want, got)
 	}
@@ -300,17 +298,17 @@ func TestRenderDiagnostics(t *testing.T) {
 
 	got := buf.String()
 
-	if !strings.HasPrefix(got, "0 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals, 2 warnings\n") {
+	if !strings.HasPrefix(got, "  0 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 
-	if !strings.Contains(got, "warnings (2):") {
+	if !strings.Contains(got, "  warnings (2):") {
 		t.Errorf("output missing 'warnings' header.\noutput:\n%s", got)
 	}
 
 	wantRows := []string{
-		"  non-local module source (main.tf:4)",
-		"  module recursion cycle (mod/main.tf:10)",
+		"    non-local module source (main.tf:4)",
+		"    module recursion cycle (mod/main.tf:10)",
 	}
 	for _, r := range wantRows {
 		if !strings.Contains(got, r) {
