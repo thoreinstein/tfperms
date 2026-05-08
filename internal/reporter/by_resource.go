@@ -21,7 +21,7 @@ import (
 // quiet has the same effect as in Render: the `unknown resources` and
 // `unresolved conditionals` sections are suppressed entirely (no
 // header, no body, no leading blank line). The summary line still
-// carries the accurate counts so integration tooling that grep's the
+// carries the accurate counts so integration tooling that greps the
 // first line still sees that diagnostic findings exist. Per-resource
 // groups, warnings, and conditional annotations are unaffected.
 //

@@ -48,7 +48,7 @@ import (
 // sections entirely (no header, no body, no leading blank line) so a
 // user investigating only the resolved permissions can scroll past the
 // noise. The summary line still carries the accurate unknowns and
-// unresolved counts so downstream tooling that grep's the first line
+// unresolved counts so downstream tooling that greps the first line
 // can detect that the run had diagnostic findings even when the user
 // asked for a compact output. Warnings, plan, and apply-only sections
 // are unaffected — quiet trims diagnostic context that was added for
