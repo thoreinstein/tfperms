@@ -9,6 +9,7 @@
     "cloudkms.keyRings.create",
     "cloudkms.keyRings.get"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

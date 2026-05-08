@@ -71,7 +71,7 @@ func TestRenderFull(t *testing.T) {
 	// Summary line: must be the first line. Anchor on a leading prefix
 	// + count so a regression that flips the format ("17 resources for
 	// 5 permissions, ...") fails loudly.
-	if !strings.HasPrefix(got, "5 permissions for 17 resources, 1 unknown, 1 unresolved conditional\n") {
+	if !strings.HasPrefix(got, "5 permissions for 17 resources, 1 unknown, 1 unresolved conditional, 0 warnings\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 
@@ -152,7 +152,7 @@ func TestRenderCollapsed(t *testing.T) {
 	// The summary line still surfaces the zero diagnostic counts so
 	// a downstream consumer can detect "clean run" without parsing
 	// the body.
-	if !strings.HasPrefix(got, "2 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals\n") {
+	if !strings.HasPrefix(got, "2 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals, 0 warnings\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 
@@ -190,7 +190,7 @@ func TestRenderMinimal(t *testing.T) {
 	}
 
 	got := buf.String()
-	want := "0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals\n"
+	want := "0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals, 0 warnings\n"
 	if got != want {
 		t.Errorf("minimal output mismatch\n--- want ---\n%q\n--- got ---\n%q", want, got)
 	}
@@ -277,9 +277,45 @@ func TestRenderSummarySingular(t *testing.T) {
 	}
 
 	got := buf.String()
-	want := "1 permission for 1 resource, 0 unknowns, 0 unresolved conditionals\n"
+	want := "1 permission for 1 resource, 0 unknowns, 0 unresolved conditionals, 0 warnings\n"
 	if !strings.HasPrefix(got, want) {
 		t.Errorf("singular summary line wrong\n--- want prefix ---\n%q\n--- got ---\n%q", want, got)
+	}
+}
+
+// TestRenderDiagnostics verifies that parse-level warnings are rendered
+// under the `warnings:` header with their summary and file:line context.
+func TestRenderDiagnostics(t *testing.T) {
+	res := resolver.Result{
+		Diagnostics: []resolver.Diagnostic{
+			{Summary: "non-local module source", File: "main.tf", Line: 4},
+			{Summary: "module recursion cycle", File: "mod/main.tf", Line: 10},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(&buf, res, 1); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	got := buf.String()
+
+	if !strings.HasPrefix(got, "0 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals, 2 warnings\n") {
+		t.Errorf("summary line wrong; got:\n%s", got)
+	}
+
+	if !strings.Contains(got, "warnings (2):") {
+		t.Errorf("output missing 'warnings' header.\noutput:\n%s", got)
+	}
+
+	wantRows := []string{
+		"  non-local module source (main.tf:4)",
+		"  module recursion cycle (mod/main.tf:10)",
+	}
+	for _, r := range wantRows {
+		if !strings.Contains(got, r) {
+			t.Errorf("output missing row %q.\noutput:\n%s", r, got)
+		}
 	}
 }
 

@@ -100,7 +100,7 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 	ew := &errWriter{w: w}
 
 	fmt.Fprintf(ew,
-		"%d %s for %d %s, %d %s, %d %s\n",
+		"%d %s for %d %s, %d %s, %d %s, %d %s\n",
 		len(res.TotalApplyPerms),
 		plural(len(res.TotalApplyPerms), "permission", "permissions"),
 		resourceCount,
@@ -109,6 +109,8 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		plural(len(res.Unknowns), "unknown", "unknowns"),
 		len(res.Unresolved),
 		plural(len(res.Unresolved), "unresolved conditional", "unresolved conditionals"),
+		len(res.Diagnostics),
+		plural(len(res.Diagnostics), "warning", "warnings"),
 	)
 
 	if len(res.PlanPerms) > 0 {
@@ -124,6 +126,14 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		fmt.Fprintf(ew, "apply-only permissions (%d):\n", len(res.ApplyOnlyPerms))
 		for _, p := range res.ApplyOnlyPerms {
 			fmt.Fprintf(ew, "  %s\n", p)
+		}
+	}
+
+	if len(res.Diagnostics) > 0 {
+		fmt.Fprintln(ew)
+		fmt.Fprintf(ew, "warnings (%d):\n", len(res.Diagnostics))
+		for _, d := range res.Diagnostics {
+			fmt.Fprintf(ew, "  %s (%s:%d)\n", d.Summary, d.File, d.Line)
 		}
 	}
 

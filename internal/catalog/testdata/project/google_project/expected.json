@@ -13,6 +13,7 @@
     "resourcemanager.projects.get",
     "resourcemanager.projects.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

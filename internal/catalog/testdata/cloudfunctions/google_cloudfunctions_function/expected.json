@@ -17,6 +17,7 @@
     "iam.serviceAccounts.actAs",
     "storage.objects.get"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

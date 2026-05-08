@@ -133,6 +133,7 @@ resource "google_storage_bucket" "primary" {
 		"for 1 resource",
 		"0 unknowns",
 		"0 unresolved conditionals",
+		"0 warnings",
 	}
 	for _, part := range wantSummaryParts {
 		if !strings.Contains(summary, part) {
@@ -188,7 +189,7 @@ resource "google_made_up_thing" "x" {
 
 	got := out.String()
 
-	if !strings.HasPrefix(got, "0 permissions for 1 resource, 1 unknown, 0 unresolved conditionals\n") {
+	if !strings.HasPrefix(got, "0 permissions for 1 resource, 1 unknown, 0 unresolved conditionals, 0 warnings\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
 	if !strings.Contains(got, "unknown resources (1):") {
@@ -196,6 +197,40 @@ resource "google_made_up_thing" "x" {
 	}
 	if !strings.Contains(got, "google_made_up_thing") {
 		t.Errorf("output missing unknown resource type.\noutput:\n%s", got)
+	}
+}
+
+// TestRootCommandReportsWarning drives the warnings path: a parse-level
+// warning (e.g. a non-local module source) must appear under the
+// `warnings` header in the report. Pins the Epic 6 requirement to
+// surface parser diagnostics.
+func TestRootCommandReportsWarning(t *testing.T) {
+	dir := writeFixture(t, `
+module "remote" {
+  source = "hashicorp/consul/aws"
+}
+`)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	if !strings.HasPrefix(got, "0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals, 1 warning\n") {
+		t.Errorf("summary line wrong; got:\n%s", got)
+	}
+	if !strings.Contains(got, "warnings (1):") {
+		t.Errorf("output missing 'warnings' header.\noutput:\n%s", got)
+	}
+	if !strings.Contains(got, "non-local module source (main.tf:2)") {
+		t.Errorf("output missing expected warning summary and location.\noutput:\n%s", got)
 	}
 }
 

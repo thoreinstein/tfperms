@@ -6,6 +6,7 @@
   "total_apply_perms": [
     "storage.objects.list"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

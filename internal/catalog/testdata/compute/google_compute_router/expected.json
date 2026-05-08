@@ -13,6 +13,7 @@
     "compute.routers.get",
     "compute.routers.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

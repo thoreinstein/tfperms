@@ -13,6 +13,7 @@
     "cloudsql.users.list",
     "cloudsql.users.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

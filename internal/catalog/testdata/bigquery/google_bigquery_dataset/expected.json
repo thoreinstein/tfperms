@@ -13,6 +13,7 @@
     "bigquery.datasets.get",
     "bigquery.datasets.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

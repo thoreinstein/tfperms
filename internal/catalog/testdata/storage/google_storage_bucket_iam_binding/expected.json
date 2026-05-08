@@ -9,6 +9,7 @@
     "storage.buckets.getIamPolicy",
     "storage.buckets.setIamPolicy"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

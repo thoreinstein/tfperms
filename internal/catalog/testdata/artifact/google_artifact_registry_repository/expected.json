@@ -13,6 +13,7 @@
     "artifactregistry.repositories.get",
     "artifactregistry.repositories.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

@@ -11,6 +11,7 @@
     "iam.serviceAccountKeys.delete",
     "iam.serviceAccountKeys.get"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

@@ -9,6 +9,7 @@
     "resourcemanager.projects.getIamPolicy",
     "resourcemanager.projects.setIamPolicy"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

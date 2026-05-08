@@ -13,6 +13,7 @@
     "compute.targetPools.get",
     "compute.targetPools.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

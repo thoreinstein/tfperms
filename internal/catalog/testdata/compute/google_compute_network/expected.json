@@ -13,6 +13,7 @@
     "compute.networks.get",
     "compute.networks.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

@@ -11,6 +11,7 @@
     "pubsub.schemas.delete",
     "pubsub.schemas.get"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }
