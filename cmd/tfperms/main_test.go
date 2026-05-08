@@ -836,6 +836,34 @@ func TestRootCommandByResourceConflictsWithExplicitFlatFormat(t *testing.T) {
 	}
 }
 
+// TestRootCommandByResourceWithInvalidFormatReportsInvalidFormat is the
+// regression test for the validation-order bug where the user passing
+// `--by-resource --format=<typo>` saw the less-actionable conflict error
+// ("--by-resource conflicts with --format=jsno") instead of the
+// actionable invalid-format error. PreRunE now runs validateFormatFlags
+// before resolveFormat, so a bad --format value surfaces first as
+// "invalid --format" with the legal-values list.
+func TestRootCommandByResourceWithInvalidFormatReportsInvalidFormat(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--by-resource", "--format=jsno"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute with --by-resource and --format=jsno returned nil; expected invalid-format error.\noutput: %s", out.String())
+	}
+	if !strings.Contains(err.Error(), "invalid --format") {
+		t.Errorf("error should mention invalid --format; got: %v", err)
+	}
+	// A regression that ran resolveFormat before validateFormatFlags
+	// would surface the conflict error instead of the typo error.
+	if strings.Contains(err.Error(), "conflicts with") {
+		t.Errorf("error should be invalid-format, not flag conflict; got: %v", err)
+	}
+}
+
 // TestRootCommandByResourceRelativisesFile pins the path-relativisation
 // contract for the by-resource format: an instance row's location
 // must be `main.tf:N`, never the absolute t.TempDir path.

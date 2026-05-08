@@ -23,8 +23,8 @@ import (
 //	42 permissions for 17 resources, 2 unknowns, 3 unresolved conditionals
 //
 //	google_storage_bucket (2 instances):
-//	    primary (main.tf:10)
-//	    lookup (main.tf:16)
+//	    google_storage_bucket.primary (main.tf:10)
+//	    google_storage_bucket.lookup (main.tf:16)
 //	  plan permissions (2):
 //	    storage.buckets.get
 //	    storage.buckets.getIamPolicy  # from conditional uniform_bucket_level_access=true
