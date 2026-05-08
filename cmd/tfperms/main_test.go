@@ -245,9 +245,10 @@ module "remote" {
 //
 // We chdir into the parent of the fixture so the input ("fixture")
 // is unambiguously relative, then assert that the warning location
-// renders as "fixture/main.tf:2" — i.e. the path prefix preserved
-// the relativeness. A regression that emitted the absolute t.TempDir
-// path would not contain that suffix.
+// renders as "main.tf:2" — filepath.Rel against the absolutized
+// input dir strips the "fixture/" prefix, leaving the path relative
+// to baseDir. A regression that emitted the absolute t.TempDir path
+// would surface the parent prefix instead.
 func TestRootCommandReportsWarningRelativePath(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "fixture")
