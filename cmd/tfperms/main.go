@@ -295,13 +295,13 @@ func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	relativizeResult(&result, dir)
 	switch format {
 	case formatByResource:
-		return reporter.RenderByResource(w, result, len(resources))
+		return reporter.RenderByResource(w, result, len(resources), false)
 	case formatRole:
 		return reporter.RenderRole(w, result, roleName, version, date)
 	case formatJSON:
 		return reporter.RenderJSON(w, result, len(resources), version)
 	default:
-		return reporter.Render(w, result, len(resources))
+		return reporter.Render(w, result, len(resources), false)
 	}
 }
 

@@ -18,6 +18,13 @@ import (
 // distinct Terraform resource block the parser observed, with each
 // module-instance copy and data source counted once.
 //
+// quiet has the same effect as in Render: the `unknown resources` and
+// `unresolved conditionals` sections are suppressed entirely (no
+// header, no body, no leading blank line). The summary line still
+// carries the accurate counts so integration tooling that grep's the
+// first line still sees that diagnostic findings exist. Per-resource
+// groups, warnings, and conditional annotations are unaffected.
+//
 // Output layout:
 //
 //	42 permissions for 17 resources, 2 unknowns, 3 unresolved conditionals
@@ -61,7 +68,7 @@ import (
 // All writes flow through the same errWriter Render uses, so a broken
 // stdout pipe surfaces as a non-nil return rather than silent
 // truncation.
-func RenderByResource(w io.Writer, res resolver.Result, resourceCount int) error {
+func RenderByResource(w io.Writer, res resolver.Result, resourceCount int, quiet bool) error {
 	res = Canonicalize(res)
 	ew := &errWriter{w: w}
 
@@ -118,7 +125,7 @@ func RenderByResource(w io.Writer, res resolver.Result, resourceCount int) error
 		}
 	}
 
-	if len(res.Unknowns) > 0 {
+	if !quiet && len(res.Unknowns) > 0 {
 		fmt.Fprintln(ew)
 		fmt.Fprintf(ew, "  unknown resources (%d):\n", len(res.Unknowns))
 		for _, u := range res.Unknowns {
@@ -127,7 +134,7 @@ func RenderByResource(w io.Writer, res resolver.Result, resourceCount int) error
 		}
 	}
 
-	if len(res.Unresolved) > 0 {
+	if !quiet && len(res.Unresolved) > 0 {
 		fmt.Fprintln(ew)
 		fmt.Fprintf(ew, "  unresolved conditionals (%d):\n", len(res.Unresolved))
 		for _, u := range res.Unresolved {
