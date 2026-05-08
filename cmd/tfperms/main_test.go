@@ -234,6 +234,58 @@ module "remote" {
 	}
 }
 
+// TestRootCommandReportsWarningRelativePath pins the relative-path
+// branch of relativizeDiags. parser.LoadRecursive runs the input dir
+// through filepath.Abs before walking it, so diagnostic Subject
+// filenames are absolute. If relativizeDiags compared the absolute
+// filename against the raw (still-relative) input dir, filepath.Rel
+// would fall into its error branch and the user would see absolute
+// paths in warning rows — the bug caught by review on the previous
+// iteration.
+//
+// We chdir into the parent of the fixture so the input ("fixture")
+// is unambiguously relative, then assert that the warning location
+// renders as "fixture/main.tf:2" — i.e. the path prefix preserved
+// the relativeness. A regression that emitted the absolute t.TempDir
+// path would not contain that suffix.
+func TestRootCommandReportsWarningRelativePath(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "fixture")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`
+module "remote" {
+  source = "hashicorp/consul/aws"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	t.Chdir(parent)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"fixture"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	if !strings.Contains(got, "non-local module source (main.tf:2)") {
+		t.Errorf("warning row should render path relative to the input dir 'fixture', got:\n%s", got)
+	}
+	// Absolute-path leakage would surface as the t.TempDir prefix
+	// (e.g. /var/folders/...) appearing in the warning row. Anchor
+	// on the parent to make the regression assertion explicit.
+	if strings.Contains(got, parent) {
+		t.Errorf("warning row leaked absolute path %q into output:\n%s", parent, got)
+	}
+}
+
 // TestRootCommandZeroArgsDefaultsToCwd exercises the bare-`tfperms`
 // invocation path: when no positional argument is supplied, the root
 // command falls through to rootDefaultDir ("."), which the parser
