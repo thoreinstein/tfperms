@@ -3,7 +3,9 @@ package reporter
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/thoreinstein/tfperms/internal/resolver"
@@ -145,5 +147,29 @@ func TestRenderJSONDeterministic(t *testing.T) {
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
 		t.Errorf("RenderJSON not deterministic across runs.\n--- first ---\n%s\n--- second ---\n%s",
 			first.String(), second.String())
+	}
+}
+
+// TestRenderJSONWriterError confirms that a failing io.Writer surfaces as
+// a wrapped error from RenderJSON. The errWriter adapter latches the
+// underlying error and the trailing check returns it wrapped with the
+// "write json" prefix, mirroring the role.go pattern. Reuses the
+// failingWriter and errBrokenPipe defined in reporter_test.go.
+func TestRenderJSONWriterError(t *testing.T) {
+	res := resolver.Result{
+		PlanPerms:       []string{"storage.buckets.get"},
+		TotalApplyPerms: []string{"storage.buckets.get"},
+	}
+
+	w := &failingWriter{byteBudget: 0}
+	err := RenderJSON(w, res, 0, "1.2.3")
+	if err == nil {
+		t.Fatal("RenderJSON returned nil error for failing writer; expected wrapped error")
+	}
+	if !errors.Is(err, errBrokenPipe) {
+		t.Errorf("RenderJSON error does not wrap underlying writer error: got %v", err)
+	}
+	if !strings.Contains(err.Error(), "write json") {
+		t.Errorf("RenderJSON error missing %q prefix: got %v", "write json", err)
 	}
 }

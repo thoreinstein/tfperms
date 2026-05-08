@@ -519,13 +519,26 @@ func applyPermissionSet(plan, apply map[string]struct{}, perms catalog.Permissio
 }
 
 // unknownKey is the dedup key for entries surfaced into Result.Unknowns.
-// The tuple (Type, Name, File, Line) distinguishes one unknown entry
-// from another. Name participates in uniqueness so that two unknown
-// resources sharing a type at the same file/line but with different
-// resource names (e.g. produced by the same generated block expanding
-// to multiple instances) are tracked separately rather than collapsed.
-// Two blocks with literally identical (Type, Name, File, Line) cannot
-// coexist in well-formed Terraform, so the collapse is harmless.
+// The full uniqueness tuple is (Type, Name, File, Line, ModulePathKey):
+// any one of those fields differing produces a distinct entry. Name
+// participates so that two unknown resources sharing a type at the same
+// file/line but with different resource names (e.g. produced by the same
+// generated block expanding to multiple instances) are tracked separately
+// rather than collapsed.
+//
+// ModulePathKey is required because LoadRecursive instantiates a shared
+// module template at every call site without rewriting File or Line —
+// those still point at the module's source file. Two call sites
+// (`module "x"` and `module "y"`, both pointing at the same `./mod`)
+// therefore produce unknown entries with identical (Type, Name, File,
+// Line) tuples that differ only in their ModulePath chain. Without the
+// module-path component in the key, the dedup map silently collapses
+// those entries and Result.Unknowns under-reports the unknown resources
+// reached through different module call paths. ModulePathKey is the
+// encoded form of the parser's Resource.ModulePath (NUL-joined; see
+// encodeModulePath); the slice itself is preserved on the value side of
+// the dedup map so the JSON output keeps `module_path` as the
+// disambiguator the reader sees.
 type unknownKey struct {
 	Type          string
 	Name          string
@@ -834,9 +847,19 @@ func sortedUnion(left, right map[string]struct{}) []string {
 }
 
 // sortedUnknowns returns the unknown-resource set as a sorted, non-nil
-// slice of UnknownResource. Sort order is (File, Line, Type, Name) so that
-// reporters listing unknowns in the order they appear in source files
-// can rely on file:line monotonicity, with Type and Name as tiebreakers.
+// slice of UnknownResource. Sort order is (File, Line, Type, Name,
+// ModulePath) so that reporters listing unknowns in the order they
+// appear in source files can rely on file:line monotonicity, with Type
+// and Name as tiebreakers and ModulePath as the final tiebreaker.
+// ModulePath is compared via moduleLess (the same prefix-aware
+// comparator used elsewhere in this package: [] < [a] < [a, b] < [b])
+// and is required to disambiguate the same source location reached
+// through different module call paths under LoadRecursive — without
+// it, two unknown entries with identical (File, Line, Type, Name)
+// tuples that differ only in their module-path chain would collide in
+// the comparator and the resulting order would depend on map iteration
+// order. Reporters and tests rely on this exact ordering, so any
+// change to the sort must keep it in sync with the comment.
 func sortedUnknowns(set map[unknownKey][]string) []UnknownResource {
 	out := make([]UnknownResource, 0, len(set))
 	for k, v := range set {
