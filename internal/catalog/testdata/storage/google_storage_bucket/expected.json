@@ -26,10 +26,12 @@
       "name": "primary",
       "file": "main.tf",
       "line": 10,
-      "base_perms": [
+      "base_plan": [
+        "storage.buckets.get"
+      ],
+      "base_apply_only": [
         "storage.buckets.create",
         "storage.buckets.delete",
-        "storage.buckets.get",
         "storage.buckets.update"
       ],
       "applied": [
@@ -37,8 +39,10 @@
           "when": {
             "uniform_bucket_level_access": true
           },
-          "permissions": [
-            "storage.buckets.getIamPolicy",
+          "plan": [
+            "storage.buckets.getIamPolicy"
+          ],
+          "apply_only": [
             "storage.buckets.setIamPolicy"
           ]
         }
@@ -49,9 +53,10 @@
       "name": "lookup",
       "file": "main.tf",
       "line": 16,
-      "base_perms": [
+      "base_plan": [
         "storage.buckets.get"
       ],
+      "base_apply_only": [],
       "applied": []
     }
   ]

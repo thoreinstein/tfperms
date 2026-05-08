@@ -22,10 +22,12 @@
       "name": "docker",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "artifactregistry.repositories.get"
+      ],
+      "base_apply_only": [
         "artifactregistry.repositories.create",
         "artifactregistry.repositories.delete",
-        "artifactregistry.repositories.get",
         "artifactregistry.repositories.update"
       ],
       "applied": []

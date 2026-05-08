@@ -22,10 +22,12 @@
       "name": "static",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.instanceGroups.get"
+      ],
+      "base_apply_only": [
         "compute.instanceGroups.create",
         "compute.instanceGroups.delete",
-        "compute.instanceGroups.get",
         "compute.instanceGroups.update"
       ],
       "applied": []

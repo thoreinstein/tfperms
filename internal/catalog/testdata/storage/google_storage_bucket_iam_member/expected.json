@@ -18,8 +18,10 @@
       "name": "viewer",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
-        "storage.buckets.getIamPolicy",
+      "base_plan": [
+        "storage.buckets.getIamPolicy"
+      ],
+      "base_apply_only": [
         "storage.buckets.setIamPolicy"
       ],
       "applied": []

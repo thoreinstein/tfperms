@@ -22,10 +22,12 @@
       "name": "runtime",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "iam.serviceAccounts.get"
+      ],
+      "base_apply_only": [
         "iam.serviceAccounts.create",
         "iam.serviceAccounts.delete",
-        "iam.serviceAccounts.get",
         "iam.serviceAccounts.update"
       ],
       "applied": []

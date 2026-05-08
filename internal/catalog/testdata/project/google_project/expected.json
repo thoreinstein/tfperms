@@ -22,10 +22,12 @@
       "name": "default",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "resourcemanager.projects.get"
+      ],
+      "base_apply_only": [
         "resourcemanager.projects.create",
         "resourcemanager.projects.delete",
-        "resourcemanager.projects.get",
         "resourcemanager.projects.update"
       ],
       "applied": []

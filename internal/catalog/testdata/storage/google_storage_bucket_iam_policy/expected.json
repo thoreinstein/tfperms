@@ -18,8 +18,10 @@
       "name": "policy",
       "file": "main.tf",
       "line": 9,
-      "base_perms": [
-        "storage.buckets.getIamPolicy",
+      "base_plan": [
+        "storage.buckets.getIamPolicy"
+      ],
+      "base_apply_only": [
         "storage.buckets.setIamPolicy"
       ],
       "applied": []

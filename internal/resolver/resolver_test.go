@@ -1451,12 +1451,13 @@ func TestResolveResourcesPopulatedBaseOnly(t *testing.T) {
 	}
 	got := res.Resources[0]
 	want := ResourceResult{
-		Type:      "google_storage_bucket",
-		Name:      "primary",
-		File:      "main.tf",
-		Line:      7,
-		BasePerms: []string{"storage.buckets.create", "storage.buckets.delete", "storage.buckets.get", "storage.buckets.update"},
-		Applied:   []AppliedConditional{},
+		Type:          "google_storage_bucket",
+		Name:          "primary",
+		File:          "main.tf",
+		Line:          7,
+		BasePlan:      []string{"storage.buckets.get"},
+		BaseApplyOnly: []string{"storage.buckets.create", "storage.buckets.delete", "storage.buckets.update"},
+		Applied:       []AppliedConditional{},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Resources[0] mismatch\n got: %#v\nwant: %#v", got, want)
@@ -1466,9 +1467,10 @@ func TestResolveResourcesPopulatedBaseOnly(t *testing.T) {
 // TestResolveResourcesPopulatedConditionalFires verifies that a
 // resource whose `when:` predicate matches surfaces an
 // AppliedConditional carrying the catalog's literal When map and the
-// effective permission set the conditional contributed. The
-// conditional's Permissions value uses the same effective-set
-// semantics as BasePerms (Plan ∪ Create ∪ Update ∪ Delete sorted).
+// per-stage Plan / ApplyOnly contribution the conditional made. The
+// per-stage split mirrors BasePlan / BaseApplyOnly so the by-resource
+// reporter can render plan vs apply contributions per firing
+// conditional without re-running the resolver.
 func TestResolveResourcesPopulatedConditionalFires(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
 		When: map[string]any{"uniform_bucket_level_access": true},
@@ -1494,18 +1496,17 @@ func TestResolveResourcesPopulatedConditionalFires(t *testing.T) {
 	}
 	got := res.Resources[0]
 	want := ResourceResult{
-		Type:      "google_storage_bucket",
-		Name:      "primary",
-		File:      "main.tf",
-		Line:      12,
-		BasePerms: []string{"storage.buckets.create", "storage.buckets.delete", "storage.buckets.get", "storage.buckets.update"},
+		Type:          "google_storage_bucket",
+		Name:          "primary",
+		File:          "main.tf",
+		Line:          12,
+		BasePlan:      []string{"storage.buckets.get"},
+		BaseApplyOnly: []string{"storage.buckets.create", "storage.buckets.delete", "storage.buckets.update"},
 		Applied: []AppliedConditional{
 			{
-				When: map[string]any{"uniform_bucket_level_access": true},
-				Permissions: []string{
-					"storage.buckets.getIamPolicy",
-					"storage.buckets.setIamPolicy",
-				},
+				When:      map[string]any{"uniform_bucket_level_access": true},
+				Plan:      []string{"storage.buckets.getIamPolicy"},
+				ApplyOnly: []string{"storage.buckets.setIamPolicy"},
 			},
 		},
 	}
@@ -1516,10 +1517,11 @@ func TestResolveResourcesPopulatedConditionalFires(t *testing.T) {
 
 // TestResolveResourcesPreventDestroyFiltersDelete verifies that a
 // resource carrying `lifecycle { prevent_destroy = true }` does not
-// include its Delete permissions in BasePerms — matching the global
-// PlanPerms / TotalApplyPerms semantics. The per-resource attribution
-// view must agree with the global sets, otherwise the by-resource
-// reporter would misrepresent what `terraform apply` actually needs.
+// include its Delete permissions in BaseApplyOnly — matching the
+// global PlanPerms / TotalApplyPerms semantics. The per-resource
+// attribution view must agree with the global sets, otherwise the
+// by-resource reporter would misrepresent what `terraform apply`
+// actually needs.
 func TestResolveResourcesPreventDestroyFiltersDelete(t *testing.T) {
 	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
 
@@ -1535,9 +1537,13 @@ func TestResolveResourcesPreventDestroyFiltersDelete(t *testing.T) {
 	if len(res.Resources) != 1 {
 		t.Fatalf("Resources length: got %d, want 1; full=%#v", len(res.Resources), res.Resources)
 	}
-	want := []string{"storage.buckets.create", "storage.buckets.get", "storage.buckets.update"}
-	if !reflect.DeepEqual(res.Resources[0].BasePerms, want) {
-		t.Errorf("BasePerms mismatch\n got: %#v\nwant: %#v", res.Resources[0].BasePerms, want)
+	wantPlan := []string{"storage.buckets.get"}
+	wantApplyOnly := []string{"storage.buckets.create", "storage.buckets.update"}
+	if !reflect.DeepEqual(res.Resources[0].BasePlan, wantPlan) {
+		t.Errorf("BasePlan mismatch\n got: %#v\nwant: %#v", res.Resources[0].BasePlan, wantPlan)
+	}
+	if !reflect.DeepEqual(res.Resources[0].BaseApplyOnly, wantApplyOnly) {
+		t.Errorf("BaseApplyOnly mismatch\n got: %#v\nwant: %#v", res.Resources[0].BaseApplyOnly, wantApplyOnly)
 	}
 }
 

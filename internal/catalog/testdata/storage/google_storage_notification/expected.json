@@ -15,9 +15,10 @@
       "name": "object_changed",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
         "storage.objects.list"
       ],
+      "base_apply_only": [],
       "applied": []
     }
   ]

@@ -443,29 +443,31 @@ func shuffledFixture() resolver.Result {
 		},
 		Resources: []resolver.ResourceResult{
 			{
-				Type:      "google_storage_bucket",
-				Name:      "primary",
-				File:      "main.tf",
-				Line:      20,
-				BasePerms: []string{"storage.buckets.get", "storage.buckets.create"},
+				Type:          "google_storage_bucket",
+				Name:          "primary",
+				File:          "main.tf",
+				Line:          20,
+				BasePlan:      []string{"storage.buckets.get"},
+				BaseApplyOnly: []string{"storage.buckets.create"},
 				Applied: []resolver.AppliedConditional{
 					{
-						When:        map[string]any{"uniform_bucket_level_access": true},
-						Permissions: []string{"storage.buckets.setIamPolicy", "storage.buckets.getIamPolicy"},
+						When:      map[string]any{"uniform_bucket_level_access": true},
+						Plan:      []string{"storage.buckets.getIamPolicy"},
+						ApplyOnly: []string{"storage.buckets.setIamPolicy"},
 					},
 					{
-						When:        map[string]any{"versioning": true},
-						Permissions: []string{"storage.buckets.getVersioning"},
+						When: map[string]any{"versioning": true},
+						Plan: []string{"storage.buckets.getVersioning"},
 					},
 				},
 			},
 			{
-				Type:      "google_storage_bucket",
-				Name:      "primary",
-				File:      "main.tf",
-				Line:      10,
-				BasePerms: []string{"storage.buckets.get"},
-				Applied:   []resolver.AppliedConditional{},
+				Type:     "google_storage_bucket",
+				Name:     "primary",
+				File:     "main.tf",
+				Line:     10,
+				BasePlan: []string{"storage.buckets.get"},
+				Applied:  []resolver.AppliedConditional{},
 			},
 		},
 	}
@@ -517,14 +519,18 @@ func TestCanonicalizeSortsEveryField(t *testing.T) {
 		t.Errorf("Resources not (File, Line)-sorted: %#v", got.Resources)
 	}
 
-	// Within the line-20 ResourceResult: BasePerms alphabetised, and
-	// the two Applied conditionals ordered by When-key serialisation
-	// ("uniform_bucket_level_access=true" < "versioning=true" because
-	// the key strings sort alphabetically).
+	// Within the line-20 ResourceResult: BasePlan and BaseApplyOnly
+	// alphabetised, and the two Applied conditionals ordered by
+	// When-key serialisation ("uniform_bucket_level_access=true" <
+	// "versioning=true" because the key strings sort alphabetically).
 	r20 := got.Resources[1]
-	wantBase := []string{"storage.buckets.create", "storage.buckets.get"}
-	if !reflect.DeepEqual(r20.BasePerms, wantBase) {
-		t.Errorf("Resources[line=20].BasePerms\n got: %v\nwant: %v", r20.BasePerms, wantBase)
+	wantBasePlan := []string{"storage.buckets.get"}
+	if !reflect.DeepEqual(r20.BasePlan, wantBasePlan) {
+		t.Errorf("Resources[line=20].BasePlan\n got: %v\nwant: %v", r20.BasePlan, wantBasePlan)
+	}
+	wantBaseApplyOnly := []string{"storage.buckets.create"}
+	if !reflect.DeepEqual(r20.BaseApplyOnly, wantBaseApplyOnly) {
+		t.Errorf("Resources[line=20].BaseApplyOnly\n got: %v\nwant: %v", r20.BaseApplyOnly, wantBaseApplyOnly)
 	}
 	if len(r20.Applied) != 2 {
 		t.Fatalf("Resources[line=20].Applied length: got %d, want 2; full=%#v", len(r20.Applied), r20.Applied)
@@ -535,9 +541,13 @@ func TestCanonicalizeSortsEveryField(t *testing.T) {
 	if _, ok := r20.Applied[1].When["versioning"]; !ok {
 		t.Errorf("Applied[1] should be the versioning conditional; got %#v", r20.Applied[1])
 	}
-	wantPerms := []string{"storage.buckets.getIamPolicy", "storage.buckets.setIamPolicy"}
-	if !reflect.DeepEqual(r20.Applied[0].Permissions, wantPerms) {
-		t.Errorf("Applied[0].Permissions\n got: %v\nwant: %v", r20.Applied[0].Permissions, wantPerms)
+	wantAppliedPlan := []string{"storage.buckets.getIamPolicy"}
+	if !reflect.DeepEqual(r20.Applied[0].Plan, wantAppliedPlan) {
+		t.Errorf("Applied[0].Plan\n got: %v\nwant: %v", r20.Applied[0].Plan, wantAppliedPlan)
+	}
+	wantAppliedApplyOnly := []string{"storage.buckets.setIamPolicy"}
+	if !reflect.DeepEqual(r20.Applied[0].ApplyOnly, wantAppliedApplyOnly) {
+		t.Errorf("Applied[0].ApplyOnly\n got: %v\nwant: %v", r20.Applied[0].ApplyOnly, wantAppliedApplyOnly)
 	}
 }
 

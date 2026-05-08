@@ -34,12 +34,14 @@
       "name": "vm",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.instances.get"
+      ],
+      "base_apply_only": [
         "compute.disks.create",
         "compute.disks.delete",
         "compute.instances.create",
         "compute.instances.delete",
-        "compute.instances.get",
         "compute.instances.setMetadata",
         "compute.instances.setTags",
         "compute.instances.update",

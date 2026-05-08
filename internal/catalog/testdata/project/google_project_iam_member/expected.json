@@ -18,8 +18,10 @@
       "name": "alice_viewer",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
-        "resourcemanager.projects.getIamPolicy",
+      "base_plan": [
+        "resourcemanager.projects.getIamPolicy"
+      ],
+      "base_apply_only": [
         "resourcemanager.projects.setIamPolicy"
       ],
       "applied": []

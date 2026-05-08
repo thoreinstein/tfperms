@@ -338,24 +338,25 @@ func sortedUnresolved(in []resolver.UnresolvedConditional) []resolver.Unresolved
 
 // sortedResources returns a freshly-allocated copy of in sorted by
 // (File, Line, Type, Name, ModulePath). Each ResourceResult inside
-// the slice is itself canonicalised: BasePerms is sorted
-// alphabetically and Applied is sorted by a deterministic key derived
-// from the When map's sorted-key serialisation, with each
-// AppliedConditional's Permissions also alphabetised. Slice fields
-// are reallocated so the returned tree shares no backing arrays with
-// the input — the by-resource reporter format can mutate the result
-// freely.
+// the slice is itself canonicalised: BasePlan / BaseApplyOnly are
+// sorted alphabetically and Applied is sorted by a deterministic key
+// derived from the When map's sorted-key serialisation, with each
+// AppliedConditional's Plan / ApplyOnly also alphabetised. Slice
+// fields are reallocated so the returned tree shares no backing
+// arrays with the input — the by-resource reporter format can mutate
+// the result freely.
 func sortedResources(in []resolver.ResourceResult) []resolver.ResourceResult {
 	out := make([]resolver.ResourceResult, len(in))
 	for i, r := range in {
 		out[i] = resolver.ResourceResult{
-			Type:       r.Type,
-			Name:       r.Name,
-			File:       r.File,
-			Line:       r.Line,
-			ModulePath: cloneStrings(r.ModulePath),
-			BasePerms:  sortedStrings(r.BasePerms),
-			Applied:    sortedApplied(r.Applied),
+			Type:          r.Type,
+			Name:          r.Name,
+			File:          r.File,
+			Line:          r.Line,
+			ModulePath:    cloneStrings(r.ModulePath),
+			BasePlan:      sortedStrings(r.BasePlan),
+			BaseApplyOnly: sortedStrings(r.BaseApplyOnly),
+			Applied:       sortedApplied(r.Applied),
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -379,8 +380,8 @@ func sortedResources(in []resolver.ResourceResult) []resolver.ResourceResult {
 // sortedApplied returns a freshly-allocated copy of in sorted by the
 // deterministic key produced by appliedSortKey — the When map's
 // sorted-key serialisation. Within each AppliedConditional, the When
-// map is shallow-copied and Permissions is alphabetised, so callers
-// cannot mutate the catalog's storage through the result.
+// map is shallow-copied and Plan / ApplyOnly are alphabetised, so
+// callers cannot mutate the catalog's storage through the result.
 //
 // The serialised When key is the only stable order we can produce on
 // a slice of conditionals: the catalog does not expose an intrinsic
@@ -393,8 +394,9 @@ func sortedApplied(in []resolver.AppliedConditional) []resolver.AppliedCondition
 	out := make([]resolver.AppliedConditional, len(in))
 	for i, a := range in {
 		out[i] = resolver.AppliedConditional{
-			When:        cloneWhen(a.When),
-			Permissions: sortedStrings(a.Permissions),
+			When:      cloneWhen(a.When),
+			Plan:      sortedStrings(a.Plan),
+			ApplyOnly: sortedStrings(a.ApplyOnly),
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -409,12 +411,13 @@ func sortedApplied(in []resolver.AppliedConditional) []resolver.AppliedCondition
 // When map's keys in sorted order and joins each `key=value` pair
 // with NUL separators — the same separator the resolver's
 // encodeModulePath uses, chosen because it cannot legally appear in
-// either an HCL identifier or a YAML scalar. The Permissions slice is
-// appended after a sentinel separator so two AppliedConditionals with
-// the same When but different (legally-impossible-but-defensive)
-// Permissions still order distinctly.
+// either an HCL identifier or a YAML scalar. The Plan and ApplyOnly
+// slices are appended after sentinel separators so two
+// AppliedConditionals with the same When but different
+// (legally-impossible-but-defensive) permission slices still order
+// distinctly.
 //
-// Format: `<k1>=<v1>\x00<k2>=<v2>\x00...\x00\x00<perm1>\x00<perm2>...`
+// Format: `<k1>=<v1>\x00<k2>=<v2>\x00...\x00\x00<plan1>\x00...\x00\x00<applyOnly1>\x00...`
 //
 // Values are formatted via fmt.Sprintf("%v") which renders bool /
 // string / int / float64 unambiguously — the catalog's only legal
@@ -436,7 +439,17 @@ func appliedSortKey(a resolver.AppliedConditional) string {
 	// permission bytes cannot collide with a hypothetical When value
 	// that ends in `=`.
 	b.WriteByte('\x00')
-	for _, p := range a.Permissions {
+	for _, p := range a.Plan {
+		b.WriteString(p)
+		b.WriteByte('\x00')
+	}
+	// A second doubled NUL separates the Plan slice from ApplyOnly so
+	// two conditionals whose Plan and ApplyOnly slices concatenate to
+	// the same byte sequence still order distinctly. Without this
+	// boundary, `Plan=["ab"], ApplyOnly=["c"]` would tie with
+	// `Plan=["a"], ApplyOnly=["bc"]`.
+	b.WriteByte('\x00')
+	for _, p := range a.ApplyOnly {
 		b.WriteString(p)
 		b.WriteByte('\x00')
 	}

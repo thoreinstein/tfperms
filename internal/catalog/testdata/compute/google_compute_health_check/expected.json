@@ -22,10 +22,12 @@
       "name": "tcp",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.healthChecks.get"
+      ],
+      "base_apply_only": [
         "compute.healthChecks.create",
         "compute.healthChecks.delete",
-        "compute.healthChecks.get",
         "compute.healthChecks.update"
       ],
       "applied": []

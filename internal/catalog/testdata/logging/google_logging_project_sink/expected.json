@@ -22,10 +22,12 @@
       "name": "audit",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "logging.sinks.get"
+      ],
+      "base_apply_only": [
         "logging.sinks.create",
         "logging.sinks.delete",
-        "logging.sinks.get",
         "logging.sinks.update"
       ],
       "applied": []

@@ -22,10 +22,12 @@
       "name": "default",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.targetPools.get"
+      ],
+      "base_apply_only": [
         "compute.targetPools.create",
         "compute.targetPools.delete",
-        "compute.targetPools.get",
         "compute.targetPools.update"
       ],
       "applied": []

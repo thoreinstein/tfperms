@@ -20,10 +20,12 @@
       "name": "events",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
-        "pubsub.schemas.create",
-        "pubsub.schemas.delete",
+      "base_plan": [
         "pubsub.schemas.get"
+      ],
+      "base_apply_only": [
+        "pubsub.schemas.create",
+        "pubsub.schemas.delete"
       ],
       "applied": []
     }

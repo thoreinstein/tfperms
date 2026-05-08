@@ -22,10 +22,12 @@
       "name": "lb_ip",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.globalAddresses.get"
+      ],
+      "base_apply_only": [
         "compute.globalAddresses.create",
         "compute.globalAddresses.delete",
-        "compute.globalAddresses.get",
         "compute.globalAddresses.setLabels"
       ],
       "applied": []

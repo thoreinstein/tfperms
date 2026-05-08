@@ -118,19 +118,28 @@ func RenderJSON(w io.Writer, res resolver.Result, resourceCount int, version str
 }
 
 // unionResourcePerms computes the sorted, deduplicated union of
-// r.BasePerms and every permission list in r.Applied.
+// every permission contributed by r — the base entry's Plan and
+// ApplyOnly slices, and every firing conditional's Plan and ApplyOnly
+// slices. The flattened list is what the v1 JSON schema's
+// `permissions` field renders, preserving the wire-format contract
+// documented in docs/json-schema.md across the resolver's internal
+// plan-vs-apply-only split refactor.
 func unionResourcePerms(r resolver.ResourceResult) []string {
 	set := make(map[string]struct{})
-	for _, p := range r.BasePerms {
+	for _, p := range r.BasePlan {
+		set[p] = struct{}{}
+	}
+	for _, p := range r.BaseApplyOnly {
 		set[p] = struct{}{}
 	}
 	for _, a := range r.Applied {
-		for _, p := range a.Permissions {
+		for _, p := range a.Plan {
+			set[p] = struct{}{}
+		}
+		for _, p := range a.ApplyOnly {
 			set[p] = struct{}{}
 		}
 	}
-	// Re-use sortedSet from resolver? No, it's internal.
-	// But sortedStrings from reporter.go is available.
 	perms := make([]string, 0, len(set))
 	for p := range set {
 		perms = append(perms, p)

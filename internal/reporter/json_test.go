@@ -21,15 +21,15 @@ func TestRenderJSON(t *testing.T) {
 		},
 		Resources: []resolver.ResourceResult{
 			{
-				Type:      "google_storage_bucket",
-				Name:      "data",
-				File:      "main.tf",
-				Line:      10,
-				BasePerms: []string{"storage.buckets.get"},
+				Type:     "google_storage_bucket",
+				Name:     "data",
+				File:     "main.tf",
+				Line:     10,
+				BasePlan: []string{"storage.buckets.get"},
 				Applied: []resolver.AppliedConditional{
 					{
-						When:        map[string]any{"location": "US"},
-						Permissions: []string{"storage.buckets.create"},
+						When:      map[string]any{"location": "US"},
+						ApplyOnly: []string{"storage.buckets.create"},
 					},
 				},
 			},
@@ -128,11 +128,11 @@ func TestRenderJSONDeterministic(t *testing.T) {
 		TotalApplyPerms: []string{"storage.buckets.create", "storage.buckets.get"},
 		Resources: []resolver.ResourceResult{
 			{
-				Type:      "google_storage_bucket",
-				Name:      "data",
-				File:      "main.tf",
-				Line:      10,
-				BasePerms: []string{"storage.buckets.get"},
+				Type:     "google_storage_bucket",
+				Name:     "data",
+				File:     "main.tf",
+				Line:     10,
+				BasePlan: []string{"storage.buckets.get"},
 			},
 		},
 	}

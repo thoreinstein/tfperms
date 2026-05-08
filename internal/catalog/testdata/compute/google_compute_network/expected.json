@@ -22,10 +22,12 @@
       "name": "vpc",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.networks.get"
+      ],
+      "base_apply_only": [
         "compute.networks.create",
         "compute.networks.delete",
-        "compute.networks.get",
         "compute.networks.update"
       ],
       "applied": []

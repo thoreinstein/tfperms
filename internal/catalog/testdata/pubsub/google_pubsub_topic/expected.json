@@ -22,10 +22,12 @@
       "name": "events",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "pubsub.topics.get"
+      ],
+      "base_apply_only": [
         "pubsub.topics.create",
         "pubsub.topics.delete",
-        "pubsub.topics.get",
         "pubsub.topics.update"
       ],
       "applied": []
