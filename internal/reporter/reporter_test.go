@@ -147,9 +147,10 @@ func TestRenderCollapsed(t *testing.T) {
 		t.Errorf("collapsed output should not contain 'unresolved conditionals' header.\noutput:\n%s", got)
 	}
 
-	// The summary line still surfaces the zero diagnostic counts so
-	// a downstream consumer can detect "clean run" without parsing
-	// the body.
+	// The summary line carries exactly four counts: permissions,
+	// resources, unknowns, and unresolved conditionals. Diagnostics
+	// (warnings) are rendered only in the optional warnings section
+	// and intentionally do not appear in the summary line.
 	if !strings.HasPrefix(got, "  2 permissions for 1 resource, 0 unknowns, 0 unresolved conditionals\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}

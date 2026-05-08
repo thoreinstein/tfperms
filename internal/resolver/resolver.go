@@ -412,10 +412,13 @@ func applyPermissionSet(plan, apply map[string]struct{}, perms catalog.Permissio
 }
 
 // unknownKey is the dedup key for entries surfaced into Result.Unknowns.
-// Two unknown blocks with the same type at different file/line
-// locations produce two entries — diagnostics that suppress one would
-// under-report. Two blocks with literally identical (Type, File, Line)
-// cannot coexist in well-formed Terraform, so the collapse is harmless.
+// The tuple (Type, Name, File, Line) distinguishes one unknown entry
+// from another. Name participates in uniqueness so that two unknown
+// resources sharing a type at the same file/line but with different
+// resource names (e.g. produced by the same generated block expanding
+// to multiple instances) are tracked separately rather than collapsed.
+// Two blocks with literally identical (Type, Name, File, Line) cannot
+// coexist in well-formed Terraform, so the collapse is harmless.
 type unknownKey struct {
 	Type string
 	Name string
