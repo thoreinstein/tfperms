@@ -1185,7 +1185,7 @@ func TestResolveUnknownResourceType(t *testing.T) {
 	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, nil)
 	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, nil)
 	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
-		{Type: "google_unknown_resource"},
+		{Type: "google_unknown_resource", Name: "x"},
 	})
 	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
@@ -1217,7 +1217,7 @@ func TestResolveUnknownDataSourceType(t *testing.T) {
 	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, nil)
 	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, nil)
 	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
-		{Type: "google_unknown_data"},
+		{Type: "google_unknown_data", Name: "x"},
 	})
 	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
@@ -1246,12 +1246,12 @@ func TestResolveUnknownResourceCapturesSourceLocation(t *testing.T) {
 		{Kind: "resource", Type: "google_unknown", Name: "c", File: "other.tf", Line: 5},
 	}, cat)
 
-	// Sort order is (File, Line, Type): "main.tf" < "other.tf"; within
-	// "main.tf", line 10 < line 20.
+	// Sort order is (File, Line, Type, Name): "main.tf" < "other.tf";
+	// within "main.tf", line 10 < line 20.
 	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
-		{Type: "google_unknown", File: "main.tf", Line: 10},
-		{Type: "google_unknown", File: "main.tf", Line: 20},
-		{Type: "google_unknown", File: "other.tf", Line: 5},
+		{Type: "google_unknown", Name: "a", File: "main.tf", Line: 10},
+		{Type: "google_unknown", Name: "b", File: "main.tf", Line: 20},
+		{Type: "google_unknown", Name: "c", File: "other.tf", Line: 5},
 	})
 }
 

@@ -152,6 +152,7 @@ type Diagnostic struct {
 // regression harness relativises it before comparing to goldens.
 type UnknownResource struct {
 	Type string `json:"type"`
+	Name string `json:"name"`
 	File string `json:"file"`
 	Line int    `json:"line"`
 }
@@ -237,7 +238,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 		}
 		entry, found := lookupEntry(cat, r)
 		if !found {
-			unknowns[unknownKey{Type: r.Type, File: r.File, Line: r.Line}] = struct{}{}
+			unknowns[unknownKey{Type: r.Type, Name: r.Name, File: r.File, Line: r.Line}] = struct{}{}
 			continue
 		}
 		applyPermissionSet(plan, apply, entry.base, r.PreventDestroy)
@@ -417,6 +418,7 @@ func applyPermissionSet(plan, apply map[string]struct{}, perms catalog.Permissio
 // cannot coexist in well-formed Terraform, so the collapse is harmless.
 type unknownKey struct {
 	Type string
+	Name string
 	File string
 	Line int
 }
@@ -679,11 +681,9 @@ func sortedUnion(left, right map[string]struct{}) []string {
 }
 
 // sortedUnknowns returns the unknown-resource set as a sorted, non-nil
-// slice of UnknownResource. Sort order is (File, Line, Type) so that
+// slice of UnknownResource. Sort order is (File, Line, Type, Name) so that
 // reporters listing unknowns in the order they appear in source files
-// can rely on file:line monotonicity, with Type as the tiebreaker for
-// the unlikely-but-defensible case of two unknown blocks at the same
-// location (would happen only on a malformed parser pass).
+// can rely on file:line monotonicity, with Type and Name as tiebreakers.
 func sortedUnknowns(set map[unknownKey]struct{}) []UnknownResource {
 	out := make([]UnknownResource, 0, len(set))
 	for k := range set {
@@ -699,7 +699,10 @@ func sortedUnknowns(set map[unknownKey]struct{}) []UnknownResource {
 		if out[i].Line != out[j].Line {
 			return out[i].Line < out[j].Line
 		}
-		return out[i].Type < out[j].Type
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		return out[i].Name < out[j].Name
 	})
 	return out
 }
