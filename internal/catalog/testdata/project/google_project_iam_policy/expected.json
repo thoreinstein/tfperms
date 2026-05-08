@@ -13,6 +13,7 @@
   "unknowns": [
     {
       "type": "google_iam_policy",
+      "name": "project_admin",
       "file": "main.tf",
       "line": 4
     }
