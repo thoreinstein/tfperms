@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -564,5 +565,49 @@ resource "google_storage_bucket" "b" {
 	second := run()
 	if first != second {
 		t.Errorf("output not deterministic across runs.\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	}
+}
+
+// TestRootCommandRunsJSONPipeline verifies the --format=json flag.
+func TestRootCommandRunsJSONPipeline(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-json-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = true
+}
+`)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir, "--format=json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	var got struct {
+		Version string `json:"version"`
+		Summary struct {
+			ResourceCount int `json:"resource_count"`
+		} `json:"summary"`
+		Resources []struct {
+			Type string `json:"type"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal json: %v\noutput: %s", err, out.String())
+	}
+
+	if got.Version != "1.0" {
+		t.Errorf("version = %q, want \"1.0\"", got.Version)
+	}
+	if got.Summary.ResourceCount != 1 {
+		t.Errorf("resource_count = %d, want 1", got.Summary.ResourceCount)
+	}
+	if len(got.Resources) != 1 || got.Resources[0].Type != "google_storage_bucket" {
+		t.Errorf("unexpected resources: %+v", got.Resources)
 	}
 }
