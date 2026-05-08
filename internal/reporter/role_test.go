@@ -162,17 +162,18 @@ func TestRenderRoleEmptyPermissions(t *testing.T) {
 	}
 	// yaml.v3 marshals a non-nil empty slice as `[]`, which round-trips
 	// to a non-nil empty []any. A nil slice would marshal as `null`,
-	// which round-trips to a nil rawPerms — still acceptable for an
-	// empty role, but pinning the empty-list shape protects against a
-	// regression that flips the marshalling.
-	if rawPerms != nil {
-		permsAny, ok := rawPerms.([]any)
-		if !ok {
-			t.Fatalf("includedPermissions is not a list; got %T", rawPerms)
-		}
-		if len(permsAny) != 0 {
-			t.Errorf("includedPermissions for empty Result should have zero entries; got %v", permsAny)
-		}
+	// which round-trips to a nil rawPerms — and gcloud rejects a role
+	// file whose includedPermissions is null rather than an empty list,
+	// so we pin the empty-list shape here.
+	if rawPerms == nil {
+		t.Fatalf("includedPermissions is nil (YAML `null`); empty Result must round-trip to an empty list `[]`, not null. Full doc: %#v", got)
+	}
+	permsAny, ok := rawPerms.([]any)
+	if !ok {
+		t.Fatalf("includedPermissions is not a list; got %T", rawPerms)
+	}
+	if len(permsAny) != 0 {
+		t.Errorf("includedPermissions for empty Result should have zero entries; got %v", permsAny)
 	}
 }
 
