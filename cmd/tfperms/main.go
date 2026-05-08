@@ -115,7 +115,17 @@ func newRootCmd() *cobra.Command {
 		// inside runAnalyze) means a misconfigured invocation fails
 		// before parser.LoadRecursive walks the disk — quicker
 		// feedback on a CI run that mistypes the role name.
+		//
+		// Order matters: validateFormatFlags runs first so a typo like
+		// `--by-resource --format=jsno` surfaces as the actionable
+		// "invalid --format" error rather than the --by-resource /
+		// --format conflict error. Only after the format value is
+		// known to be one of the legal values does resolveFormat
+		// reconcile --by-resource against an explicit --format.
 		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormatFlags(format, roleName); err != nil {
+				return err
+			}
 			// cmd.Flags().Changed("format") distinguishes "user passed
 			// --format=X" from "format holds its zero/default value
 			// because the user did not pass --format". Without that
@@ -129,7 +139,7 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			format = effective
-			return validateFormatFlags(format, roleName)
+			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := rootDefaultDir
