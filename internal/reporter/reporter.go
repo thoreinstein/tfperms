@@ -273,12 +273,20 @@ func sortedDiagnostics(in []resolver.Diagnostic) []resolver.Diagnostic {
 }
 
 // sortedUnknowns returns a freshly-allocated copy of in sorted by
-// (File, Line, Type, Name) — matching the resolver's own
+// (File, Line, Type, Name, ModulePath) — matching the resolver's own
 // sortedUnknowns order so calling Canonicalize on a Result from
-// Resolve is the identity.
+// Resolve is the identity. ModulePath is the final tiebreaker,
+// compared via moduleLess (the same prefix-aware comparator the
+// resolver uses: [] < [a] < [a, b] < [b]). The returned slice does
+// not share ModulePath backing arrays with the input — each non-nil
+// ModulePath is cloned, and nil stays nil to preserve the JSON
+// `omitempty` behaviour for root-level resources.
 func sortedUnknowns(in []resolver.UnknownResource) []resolver.UnknownResource {
 	out := make([]resolver.UnknownResource, len(in))
 	copy(out, in)
+	for i := range out {
+		out[i].ModulePath = cloneStrings(out[i].ModulePath)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
 			return out[i].File < out[j].File
