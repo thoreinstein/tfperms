@@ -633,6 +633,33 @@ func TestCanonicalizeRootModulePathStaysNil(t *testing.T) {
 	}
 }
 
+// TestCanonicalizeUnknownsModulePathNotShared pins that the
+// Unknowns slice returned by Canonicalize does not share ModulePath
+// backing arrays with the input. Without this, mutating an output
+// element's ModulePath would leak back into the caller's Result —
+// violating Canonicalize's "fresh allocation" contract.
+func TestCanonicalizeUnknownsModulePathNotShared(t *testing.T) {
+	in := resolver.Result{
+		Unknowns: []resolver.UnknownResource{{
+			Type:       "google_storage_bucket",
+			Name:       "primary",
+			ModulePath: []string{"app", "storage"},
+			File:       "main.tf",
+			Line:       10,
+		}},
+	}
+	original := []string{"app", "storage"}
+
+	got := Canonicalize(in)
+
+	got.Unknowns[0].ModulePath[0] = "MUTATED"
+
+	if !reflect.DeepEqual(in.Unknowns[0].ModulePath, original) {
+		t.Errorf("input Unknowns[0].ModulePath was mutated via shared backing array\n  got: %#v\n want: %#v",
+			in.Unknowns[0].ModulePath, original)
+	}
+}
+
 // TestRenderTwoRunsAreByteIdentical pins tfperms-ftq.5's acceptance
 // criteria directly: two runs of Render against the same fixture
 // produce byte-identical output. The fixture is shuffled (slices in
