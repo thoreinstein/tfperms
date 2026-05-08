@@ -662,31 +662,43 @@ resource "google_storage_bucket" "b" {
 // TestResolveFormat pins the --format / --by-resource interaction
 // rules. The defaulting cases (no --by-resource leaves --format
 // untouched) and the conflict-detection branch (--by-resource with
-// an explicit non-default --format other than by-resource) both flow
-// through resolveFormat, so driving the helper directly exercises
-// every branch without constructing a cobra command.
+// an explicit --format other than by-resource — including the
+// otherwise-default --format=flat) both flow through resolveFormat,
+// so driving the helper directly exercises every branch without
+// constructing a cobra command.
+//
+// The explicitFormat field mirrors cmd.Flags().Changed("format") at
+// the cobra layer: it is true when the user actually passed --format,
+// false when the variable holds its default formatFlat because no
+// --format was given. The "explicit --format=flat conflicts with
+// --by-resource" case below is the regression Implement v2 caught:
+// a value-equal-to-default check is not the same as a "did the user
+// pass this flag" check, and conflating them silently accepts
+// `--format=flat --by-resource`.
 func TestResolveFormat(t *testing.T) {
 	cases := []struct {
-		name       string
-		format     string
-		byResource bool
-		want       string
-		wantError  bool
+		name           string
+		format         string
+		explicitFormat bool
+		byResource     bool
+		want           string
+		wantError      bool
 	}{
-		{name: "default flat alone", format: "flat", byResource: false, want: "flat"},
-		{name: "explicit json alone", format: "json", byResource: false, want: "json"},
-		{name: "by-resource alone overrides default", format: "flat", byResource: true, want: "by-resource"},
-		{name: "by-resource agrees with --format=by-resource", format: "by-resource", byResource: true, want: "by-resource"},
-		{name: "by-resource conflicts with --format=role", format: "role", byResource: true, wantError: true},
-		{name: "by-resource conflicts with --format=json", format: "json", byResource: true, wantError: true},
+		{name: "default flat alone", format: "flat", explicitFormat: false, byResource: false, want: "flat"},
+		{name: "explicit json alone", format: "json", explicitFormat: true, byResource: false, want: "json"},
+		{name: "by-resource alone overrides default", format: "flat", explicitFormat: false, byResource: true, want: "by-resource"},
+		{name: "by-resource agrees with --format=by-resource", format: "by-resource", explicitFormat: true, byResource: true, want: "by-resource"},
+		{name: "by-resource conflicts with explicit --format=flat", format: "flat", explicitFormat: true, byResource: true, wantError: true},
+		{name: "by-resource conflicts with --format=role", format: "role", explicitFormat: true, byResource: true, wantError: true},
+		{name: "by-resource conflicts with --format=json", format: "json", explicitFormat: true, byResource: true, wantError: true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveFormat(tc.format, tc.byResource)
+			got, err := resolveFormat(tc.format, tc.explicitFormat, tc.byResource)
 			if tc.wantError {
 				if err == nil {
-					t.Fatalf("resolveFormat(%q, %v) returned nil error; want error", tc.format, tc.byResource)
+					t.Fatalf("resolveFormat(%q, %v, %v) returned nil error; want error", tc.format, tc.explicitFormat, tc.byResource)
 				}
 				if !strings.Contains(err.Error(), "--by-resource") || !strings.Contains(err.Error(), "--format") {
 					t.Errorf("error should name both --by-resource and --format; got: %v", err)
@@ -694,10 +706,10 @@ func TestResolveFormat(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("resolveFormat(%q, %v) unexpected error: %v", tc.format, tc.byResource, err)
+				t.Fatalf("resolveFormat(%q, %v, %v) unexpected error: %v", tc.format, tc.explicitFormat, tc.byResource, err)
 			}
 			if got != tc.want {
-				t.Errorf("resolveFormat(%q, %v) = %q, want %q", tc.format, tc.byResource, got, tc.want)
+				t.Errorf("resolveFormat(%q, %v, %v) = %q, want %q", tc.format, tc.explicitFormat, tc.byResource, got, tc.want)
 			}
 		})
 	}
@@ -786,6 +798,35 @@ func TestRootCommandByResourceConflictsWithFormat(t *testing.T) {
 	err := root.Execute()
 	if err == nil {
 		t.Fatalf("Execute with --by-resource and --format=role returned nil; expected conflict error.\noutput: %s", out.String())
+	}
+	if !strings.Contains(err.Error(), "--by-resource") {
+		t.Errorf("conflict error should mention --by-resource; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--format") {
+		t.Errorf("conflict error should mention --format; got: %v", err)
+	}
+}
+
+// TestRootCommandByResourceConflictsWithExplicitFlatFormat is the
+// regression test for the bug where `--format=flat --by-resource` was
+// silently accepted. The advertised contract on the --by-resource
+// flag help is that it is mutually exclusive with --format (other
+// than --format=by-resource itself), and that contract has to hold
+// when the user explicitly types --format=flat — not just when they
+// pick a non-default value. Without the cmd.Flags().Changed("format")
+// signal in PreRunE, resolveFormat could not distinguish "user did
+// not pass --format" from "user explicitly passed --format=flat",
+// because both leave format == formatFlat.
+func TestRootCommandByResourceConflictsWithExplicitFlatFormat(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--by-resource", "--format=flat"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute with --by-resource and --format=flat returned nil; expected conflict error.\noutput: %s", out.String())
 	}
 	if !strings.Contains(err.Error(), "--by-resource") {
 		t.Errorf("conflict error should mention --by-resource; got: %v", err)
