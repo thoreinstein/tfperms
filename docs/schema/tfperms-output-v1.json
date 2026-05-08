@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tfperms Output Schema v1.0",
+  "description": "Stable JSON output format for tfperms IAM analysis",
+  "type": "object",
+  "required": [
+    "version",
+    "summary",
+    "plan_permissions",
+    "apply_only_permissions",
+    "total_apply_permissions",
+    "resources",
+    "diagnostics",
+    "unknowns",
+    "unresolved_conditionals",
+    "metadata"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "API schema version (e.g., \"1.0\")",
+      "enum": ["1.0"]
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "permission_count",
+        "resource_count",
+        "unknown_count",
+        "unresolved_count"
+      ],
+      "properties": {
+        "permission_count": { "type": "integer" },
+        "resource_count": { "type": "integer" },
+        "unknown_count": { "type": "integer" },
+        "unresolved_count": { "type": "integer" }
+      }
+    },
+    "plan_permissions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sorted list of permissions required for terraform plan"
+    },
+    "apply_only_permissions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sorted list of permissions required for terraform apply that are NOT in plan_permissions"
+    },
+    "total_apply_permissions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sorted list of all permissions required for terraform apply (Plan ∪ ApplyOnly)"
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "name", "file", "line", "permissions"],
+        "properties": {
+          "type": { "type": "string" },
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "module_path": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "permissions": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["summary", "file", "line"],
+        "properties": {
+          "summary": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" }
+        }
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "name", "file", "line"],
+        "properties": {
+          "type": { "type": "string" },
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "module_path": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "unresolved_conditionals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["resource_type", "resource_name", "attribute", "reason", "file", "line"],
+        "properties": {
+          "resource_type": { "type": "string" },
+          "resource_name": { "type": "string" },
+          "attribute": { "type": "string" },
+          "reason": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "module_path": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["tfperms_version", "generated_at"],
+      "properties": {
+        "tfperms_version": { "type": "string" },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}
