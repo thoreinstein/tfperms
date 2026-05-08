@@ -91,6 +91,7 @@ func newRootCmd() *cobra.Command {
 		format     string
 		roleName   string
 		byResource bool
+		quiet      bool
 	)
 	cmd := &cobra.Command{
 		Use:     "tfperms [path]",
@@ -146,13 +147,20 @@ func newRootCmd() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runAnalyze(cmd.OutOrStdout(), dir, format, roleName)
+			return runAnalyze(cmd.OutOrStdout(), dir, format, roleName, quiet)
 		},
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list), by-resource (grouped by resource type), role (GCP custom-role YAML), or json")
 	cmd.Flags().StringVar(&roleName, "role-name", "", "GCP custom-role ID; whenever provided must match ^[a-zA-Z0-9_]{3,64}$, and is required with --format=role")
 	cmd.Flags().BoolVar(&byResource, "by-resource", false, "shorthand for --format=by-resource; mutually exclusive with --format")
+	// --quiet only suppresses display sections in the flat / by-resource
+	// formats; the role and json formats are unaffected (the JSON
+	// schema is a stability surface, and the role formatter does not
+	// emit unknowns / unresolved sections at all). The summary line
+	// keeps the accurate counts so downstream tooling that grep's the
+	// first line still detects diagnostic findings under --quiet.
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "suppress unknown-resource and unresolved-conditional sections in flat and by-resource output (no effect on role/json)")
 	cmd.AddCommand(newCatalogCmd())
 	return cmd
 }
@@ -281,7 +289,15 @@ func validateFormatFlags(format, roleName string) error {
 // `modules/api/main.tf`. relativizeResult does that rewrite once,
 // after Resolve, so every formatter sees the same root-relative
 // shape.
-func runAnalyze(w io.Writer, dir, format, roleName string) error {
+//
+// quiet suppresses the `unknown resources` and `unresolved
+// conditionals` sections in the flat and by-resource formats only.
+// The role and json formats ignore the flag: role output is a YAML
+// custom-role document that has no diagnostic sections to suppress,
+// and the JSON v1.0 schema is a stability surface — silently dropping
+// the `unknowns` / `unresolved` arrays under --quiet would break
+// integration consumers that always expect those keys to be present.
+func runAnalyze(w io.Writer, dir, format, roleName string, quiet bool) error {
 	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
 		return fmt.Errorf("load %q: %w", dir, err)
@@ -295,13 +311,13 @@ func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	relativizeResult(&result, dir)
 	switch format {
 	case formatByResource:
-		return reporter.RenderByResource(w, result, len(resources), false)
+		return reporter.RenderByResource(w, result, len(resources), quiet)
 	case formatRole:
 		return reporter.RenderRole(w, result, roleName, version, date)
 	case formatJSON:
 		return reporter.RenderJSON(w, result, len(resources), version)
 	default:
-		return reporter.Render(w, result, len(resources), false)
+		return reporter.Render(w, result, len(resources), quiet)
 	}
 }
 
