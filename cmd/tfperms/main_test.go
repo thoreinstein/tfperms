@@ -353,6 +353,174 @@ func TestRootCommandRejectsExtraArgs(t *testing.T) {
 	}
 }
 
+// TestValidateFormatFlags pins the cobra-independent flag-validation
+// contract. Each row covers one of the rejection rules in
+// validateFormatFlags: unknown --format value, --format=role missing
+// --role-name, --role-name failing the regex (too short, illegal
+// character, too long), and the happy paths for both formats. Driving
+// the helper directly keeps the assertions on validation logic
+// rather than on cobra's error-formatting plumbing.
+func TestValidateFormatFlags(t *testing.T) {
+	cases := []struct {
+		name      string
+		format    string
+		roleName  string
+		wantError bool
+	}{
+		{name: "default flat empty role-name", format: "flat", roleName: "", wantError: false},
+		{name: "flat with valid role-name", format: "flat", roleName: "my_role", wantError: false},
+		{name: "flat with invalid role-name", format: "flat", roleName: "ab", wantError: true},
+		{name: "role with valid role-name", format: "role", roleName: "my_role", wantError: false},
+		{name: "role missing role-name", format: "role", roleName: "", wantError: true},
+		{name: "role with too-short role-name", format: "role", roleName: "ab", wantError: true},
+		{name: "role with illegal char in role-name", format: "role", roleName: "a!b", wantError: true},
+		{name: "role with 65-char role-name", format: "role", roleName: strings.Repeat("a", 65), wantError: true},
+		{name: "role with 64-char role-name boundary", format: "role", roleName: strings.Repeat("a", 64), wantError: false},
+		{name: "role with 3-char role-name boundary", format: "role", roleName: "abc", wantError: false},
+		{name: "unknown format", format: "yaml", roleName: "", wantError: true},
+		{name: "empty format", format: "", roleName: "", wantError: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateFormatFlags(tc.format, tc.roleName)
+			if tc.wantError && err == nil {
+				t.Fatalf("validateFormatFlags(%q, %q) returned nil; expected an error",
+					tc.format, tc.roleName)
+			}
+			if !tc.wantError && err != nil {
+				t.Fatalf("validateFormatFlags(%q, %q) returned %v; expected nil",
+					tc.format, tc.roleName, err)
+			}
+		})
+	}
+}
+
+// TestRootCommandRejectsRoleWithoutName drives the CLI surface of
+// validateFormatFlags's "role requires role-name" rule: invoking
+// `tfperms --format=role` with no --role-name must exit non-zero with
+// a message that names the missing flag. Going through cobra (rather
+// than calling validateFormatFlags directly) proves the PreRunE wiring
+// is in place — without it the rule could silently regress to
+// "role-name is optional, run anyway and emit a YAML with title:”".
+func TestRootCommandRejectsRoleWithoutName(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--format=role"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute with --format=role and no --role-name returned nil; expected validation failure.\noutput: %s", out.String())
+	}
+	if !strings.Contains(err.Error(), "--role-name") {
+		t.Errorf("error message should mention --role-name; got: %v", err)
+	}
+}
+
+// TestRootCommandRejectsInvalidRoleName covers the regex-rejection
+// branch via the CLI. The role-name fails the alphanumeric-underscore
+// constraint, so cobra's PreRunE must surface a non-nil error before
+// the pipeline runs.
+func TestRootCommandRejectsInvalidRoleName(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--format=role", "--role-name=bad-name"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute with --role-name=bad-name returned nil; expected validation failure.\noutput: %s", out.String())
+	}
+	if !strings.Contains(err.Error(), "--role-name") {
+		t.Errorf("error message should mention --role-name; got: %v", err)
+	}
+}
+
+// TestRootCommandRoleFormat exercises the end-to-end --format=role
+// path. The fixture is the same google_storage_bucket block as the
+// flat-format wiring test, but the assertions target the YAML body:
+// the header carries the gcloud command, the title matches the
+// supplied --role-name, and includedPermissions contains every
+// catalogued storage.buckets.* permission.
+//
+// Substring-anchored assertions (rather than byte-equal compare) keep
+// the test resilient to catalog churn — adding a new
+// storage.buckets.* permission must not regress this test.
+func TestRootCommandRoleFormat(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--format=role", "--role-name=tfperms_test_role", dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	// Header anchors. The version / date strings are the dev defaults
+	// because the test binary is built without ldflags overrides;
+	// asserting on them pins the threading from main.version /
+	// main.date through to RenderRole.
+	wantHeaderParts := []string{
+		"# Generated by tfperms 0.0.0-dev on unknown\n",
+		"#   gcloud iam roles create tfperms_test_role --project=PROJECT_ID --file=role.yaml\n",
+	}
+	for _, part := range wantHeaderParts {
+		if !strings.Contains(got, part) {
+			t.Errorf("output missing header line %q.\noutput:\n%s", part, got)
+		}
+	}
+
+	// YAML body anchors. The title must be the supplied role name and
+	// the stage must default to GA. Checking both pins the RenderRole
+	// contract that --role-name flows into the title field rather
+	// than (e.g.) being silently ignored.
+	wantBodyParts := []string{
+		"title: tfperms_test_role\n",
+		"stage: GA\n",
+		"includedPermissions:\n",
+	}
+	for _, part := range wantBodyParts {
+		if !strings.Contains(got, part) {
+			t.Errorf("output missing body line %q.\noutput:\n%s", part, got)
+		}
+	}
+
+	// Representative permission rows under includedPermissions —
+	// matching the wiring-test approach: presence rather than
+	// exhaustiveness. yaml.v3's default block-list indent is two
+	// spaces with `- ` for each entry.
+	wantPermRows := []string{
+		"  - storage.buckets.get\n",
+		"  - storage.buckets.create\n",
+	}
+	for _, row := range wantPermRows {
+		if !strings.Contains(got, row) {
+			t.Errorf("output missing includedPermissions row %q.\noutput:\n%s", row, got)
+		}
+	}
+
+	// The flat-format section headers must NOT appear — a regression
+	// in the dispatch branch that fell back to reporter.Render would
+	// produce them, and the role file would be invalid YAML.
+	if strings.Contains(got, "plan permissions (") {
+		t.Errorf("role-format output unexpectedly contains a flat-format section header.\noutput:\n%s", got)
+	}
+}
+
 // TestRootCommandDeterministic asserts that two consecutive runs
 // against the same fixture produce byte-identical output. This is the
 // stable-diff contract from Journey 2 (author checking a module mid-
