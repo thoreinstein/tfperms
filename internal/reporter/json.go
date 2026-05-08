@@ -90,9 +90,10 @@ func RenderJSON(w io.Writer, res resolver.Result, resourceCount int, version str
 			Line:       r.Line,
 			ModulePath: r.ModulePath,
 			// Requirement 5: sorted, deduplicated union of all permissions.
-			// ResourceResult.BasePerms and Applied[].Permissions are
-			// already sorted/deduped by Canonicalize; we just need to
-			// union them.
+			// ResourceResult.BasePlan, BaseApplyOnly, and each
+			// Applied[]'s Plan and ApplyOnly are already
+			// sorted/deduped by Canonicalize; we just need to union
+			// them into the flat v1 Permissions field.
 			Permissions: unionResourcePerms(r),
 		}
 	}

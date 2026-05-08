@@ -214,10 +214,10 @@ func modulePrefix(path []string) string {
 //     ModulePath). The ModulePath comparator uses the same prefix-aware
 //     ordering the resolver pins ([] < [a] < [a, b] < [b]).
 //   - Resources: (File, Line, Type, Name, ModulePath). Within each
-//     ResourceResult, BasePerms is sorted alphabetically and Applied is
-//     sorted by a deterministic key derived from the When map's
-//     sorted-key serialisation, with each AppliedConditional's
-//     Permissions also alphabetised.
+//     ResourceResult, BasePlan and BaseApplyOnly are each sorted
+//     alphabetically and Applied is sorted by a deterministic key
+//     derived from the When map's sorted-key serialisation, with each
+//     AppliedConditional's Plan and ApplyOnly slices also alphabetised.
 //
 // Idempotency: Canonicalize(Canonicalize(r)) is byte-identical to
 // Canonicalize(r). Every nested slice is also a fresh allocation, so a
