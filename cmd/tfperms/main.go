@@ -116,7 +116,15 @@ func newRootCmd() *cobra.Command {
 		// before parser.LoadRecursive walks the disk — quicker
 		// feedback on a CI run that mistypes the role name.
 		PreRunE: func(cmd *cobra.Command, args []string) error {
-			effective, err := resolveFormat(format, byResource)
+			// cmd.Flags().Changed("format") distinguishes "user passed
+			// --format=X" from "format holds its zero/default value
+			// because the user did not pass --format". Without that
+			// signal, resolveFormat cannot tell whether `--by-resource
+			// --format=flat` is a real conflict (explicit clash) or a
+			// no-op (default value sitting unset alongside the
+			// shorthand). The conflict-detection branch below depends
+			// on it.
+			effective, err := resolveFormat(format, cmd.Flags().Changed("format"), byResource)
 			if err != nil {
 				return err
 			}
@@ -143,35 +151,44 @@ func newRootCmd() *cobra.Command {
 // --by-resource flag is sugar over --format=by-resource — it is
 // idiomatic for an investigative-mode invocation (tfperms ./infra
 // --by-resource) and matches the documented Journey 4 ergonomics. The
-// two flags can disagree: a user passing both --format=flat and
-// --by-resource has expressed conflicting intent and we surface the
-// conflict explicitly rather than silently picking one.
+// two flags can disagree: a user passing both --format=<anything-but-
+// by-resource> and --by-resource has expressed conflicting intent and
+// we surface the conflict explicitly rather than silently picking one.
+//
+// formatExplicit signals whether the caller actually passed --format
+// on the command line (versus format holding the default formatFlat
+// because cobra populated the zero value). Without this signal we
+// cannot distinguish `--by-resource` (the user wants by-resource;
+// format defaults to "flat") from `--format=flat --by-resource` (the
+// user explicitly contradicted themselves). The PreRunE wires this in
+// from cmd.Flags().Changed("format"); direct test callers pass it
+// explicitly.
 //
 // Returns the effective format value to thread through validation and
 // dispatch:
 //
-//   - --by-resource alone returns formatByResource (overriding the
-//     default formatFlat).
+//   - --by-resource alone (formatExplicit=false) returns
+//     formatByResource (overriding the default formatFlat).
 //   - --format=X without --by-resource returns X verbatim.
 //   - --format=by-resource and --by-resource together is permitted
-//     (they agree); --format=anything-else with --by-resource is a
+//     (they agree); --format=<anything-else> with --by-resource —
+//     including --format=flat, the otherwise-default value — is a
 //     conflict.
 //
 // The conflict error names both flags so the user knows exactly which
 // pair to reconcile. validateFormatFlags handles the rest of the
 // format-value validation downstream.
-func resolveFormat(format string, byResource bool) (string, error) {
+func resolveFormat(format string, formatExplicit, byResource bool) (string, error) {
 	if !byResource {
 		return format, nil
 	}
-	if format == formatFlat {
-		// --by-resource alone (or together with the default
-		// --format=flat — cobra has no "user explicitly set this"
-		// signal here, so we treat the default value as
-		// "unspecified"). Promote to by-resource without complaint.
+	if !formatExplicit {
+		// --by-resource alone (format holds its default value because
+		// the user did not pass --format). Promote to by-resource.
 		return formatByResource, nil
 	}
 	if format == formatByResource {
+		// Both flags set, both agree — permit and proceed.
 		return formatByResource, nil
 	}
 	return "", fmt.Errorf("--by-resource conflicts with --format=%s; pass either --by-resource or --format=by-resource, not both", format)
