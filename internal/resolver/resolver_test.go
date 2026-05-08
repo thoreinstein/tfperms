@@ -1776,3 +1776,36 @@ func assertUnresolvedEqual(t *testing.T, got, want []UnresolvedConditional) {
 		}
 	}
 }
+
+// TestResolveUnknownResourceCapturesModulePath pins that the
+// resolver propagates parser.Resource.ModulePath onto UnknownResource
+// entries. Reused modules often have unknown resources; this keeps
+// them distinct in the output.
+func TestResolveUnknownResourceCapturesModulePath(t *testing.T) {
+	cat := &catalog.Catalog{
+		Resources:   map[string]*catalog.ResourceEntry{},
+		DataSources: map[string]*catalog.DataSourceEntry{},
+		IAMBindings: map[string]*catalog.IAMBindingEntry{},
+	}
+
+	res := Resolve([]parser.Resource{
+		{
+			Kind:       "resource",
+			Type:       "google_unknown",
+			Name:       "x",
+			ModulePath: []string{"a", "b"},
+			File:       "mod/main.tf",
+			Line:       10,
+		},
+	}, cat)
+
+	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
+		{
+			Type:       "google_unknown",
+			Name:       "x",
+			ModulePath: []string{"a", "b"},
+			File:       "mod/main.tf",
+			Line:       10,
+		},
+	})
+}

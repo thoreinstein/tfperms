@@ -160,11 +160,16 @@ type Diagnostic struct {
 // come from the parser's Resource.File / Resource.Line — for
 // LoadRecursive callers this is an absolute path; the catalog
 // regression harness relativises it before comparing to goldens.
+//
+// ModulePath is the chain of module call names from the root
+// configuration down to the resource, matching the semantics used in
+// UnresolvedConditional.
 type UnknownResource struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
-	File string `json:"file"`
-	Line int    `json:"line"`
+	Type       string   `json:"type"`
+	Name       string   `json:"name"`
+	ModulePath []string `json:"module_path,omitempty"`
+	File       string   `json:"file"`
+	Line       int      `json:"line"`
 }
 
 // UnresolvedConditional describes a single conditional gating attribute
@@ -292,7 +297,7 @@ type AppliedConditional struct {
 func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 	plan := make(map[string]struct{})
 	apply := make(map[string]struct{})
-	unknowns := make(map[unknownKey]struct{})
+	unknowns := make(map[unknownKey][]string)
 	unresolved := make(map[unresolvedRecordKey]unresolvedRecordValue)
 	resourceResults := make([]ResourceResult, 0, len(resources))
 
@@ -307,7 +312,13 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 		}
 		entry, found := lookupEntry(cat, r)
 		if !found {
-			unknowns[unknownKey{Type: r.Type, Name: r.Name, File: r.File, Line: r.Line}] = struct{}{}
+			unknowns[unknownKey{
+				Type:          r.Type,
+				Name:          r.Name,
+				ModulePathKey: encodeModulePath(r.ModulePath),
+				File:          r.File,
+				Line:          r.Line,
+			}] = cloneModulePath(r.ModulePath)
 			continue
 		}
 		applyPermissionSet(plan, apply, entry.base, r.PreventDestroy)
@@ -516,10 +527,11 @@ func applyPermissionSet(plan, apply map[string]struct{}, perms catalog.Permissio
 // Two blocks with literally identical (Type, Name, File, Line) cannot
 // coexist in well-formed Terraform, so the collapse is harmless.
 type unknownKey struct {
-	Type string
-	Name string
-	File string
-	Line int
+	Type          string
+	Name          string
+	ModulePathKey string
+	File          string
+	Line          int
 }
 
 // unresolvedRecordKey is the dedup key for entries surfaced into
@@ -825,13 +837,16 @@ func sortedUnion(left, right map[string]struct{}) []string {
 // slice of UnknownResource. Sort order is (File, Line, Type, Name) so that
 // reporters listing unknowns in the order they appear in source files
 // can rely on file:line monotonicity, with Type and Name as tiebreakers.
-func sortedUnknowns(set map[unknownKey]struct{}) []UnknownResource {
+func sortedUnknowns(set map[unknownKey][]string) []UnknownResource {
 	out := make([]UnknownResource, 0, len(set))
-	for k := range set {
-		// unknownKey and UnknownResource carry the same field set —
-		// the internal type stays unexported to keep map-key usage
-		// from leaking into the API; convert at the boundary.
-		out = append(out, UnknownResource(k))
+	for k, v := range set {
+		out = append(out, UnknownResource{
+			Type:       k.Type,
+			Name:       k.Name,
+			ModulePath: v,
+			File:       k.File,
+			Line:       k.Line,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -843,7 +858,10 @@ func sortedUnknowns(set map[unknownKey]struct{}) []UnknownResource {
 		if out[i].Type != out[j].Type {
 			return out[i].Type < out[j].Type
 		}
-		return out[i].Name < out[j].Name
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return moduleLess(out[i].ModulePath, out[j].ModulePath)
 	})
 	return out
 }

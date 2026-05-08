@@ -148,7 +148,7 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		fmt.Fprintln(ew)
 		fmt.Fprintf(ew, "  unknown resources (%d):\n", len(res.Unknowns))
 		for _, u := range res.Unknowns {
-			fmt.Fprintf(ew, "    %s.%s (%s:%d)\n", u.Type, u.Name, u.File, u.Line)
+			fmt.Fprintf(ew, "    %s%s.%s (%s:%d)\n", modulePrefix(u.ModulePath), u.Type, u.Name, u.File, u.Line)
 		}
 	}
 
@@ -289,7 +289,10 @@ func sortedUnknowns(in []resolver.UnknownResource) []resolver.UnknownResource {
 		if out[i].Type != out[j].Type {
 			return out[i].Type < out[j].Type
 		}
-		return out[i].Name < out[j].Name
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return moduleLess(out[i].ModulePath, out[j].ModulePath)
 	})
 	return out
 }

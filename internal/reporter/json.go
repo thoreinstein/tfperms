@@ -1,0 +1,127 @@
+package reporter
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"time"
+
+	"github.com/thoreinstein/tfperms/internal/resolver"
+)
+
+// jsonOutput is the stable, versioned JSON representation of a
+// tfperms analysis result. See docs/schema/tfperms-output-v1.json
+// for the formal JSON Schema.
+type jsonOutput struct {
+	Version                string                           `json:"version"`
+	Summary                jsonSummary                      `json:"summary"`
+	PlanPermissions        []string                         `json:"plan_permissions"`
+	ApplyOnlyPermissions   []string                         `json:"apply_only_permissions"`
+	TotalApplyPermissions  []string                         `json:"total_apply_permissions"`
+	Resources              []jsonResource                   `json:"resources"`
+	Diagnostics            []resolver.Diagnostic            `json:"diagnostics"`
+	Unknowns               []resolver.UnknownResource       `json:"unknowns"`
+	UnresolvedConditionals []resolver.UnresolvedConditional `json:"unresolved_conditionals"`
+	Metadata               jsonMetadata                     `json:"metadata"`
+}
+
+type jsonSummary struct {
+	PermissionCount int `json:"permission_count"`
+	ResourceCount   int `json:"resource_count"`
+	UnknownCount    int `json:"unknown_count"`
+	UnresolvedCount int `json:"unresolved_count"`
+}
+
+type jsonResource struct {
+	Type       string   `json:"type"`
+	Name       string   `json:"name"`
+	File       string   `json:"file"`
+	Line       int      `json:"line"`
+	ModulePath []string `json:"module_path,omitempty"`
+	// Permissions is the sorted, deduplicated union of all permissions
+	// required by this specific resource (Base + Applied).
+	Permissions []string `json:"permissions"`
+}
+
+type jsonMetadata struct {
+	TFPermsVersion string    `json:"tfperms_version"`
+	GeneratedAt    time.Time `json:"generated_at"`
+}
+
+// RenderJSON writes the stable JSON representation of res to w.
+//
+// resourceCount is the number of distinct Terraform resources analysed,
+// matching Render's definition.
+//
+// version is the tfperms build version (main.version) and now is the
+// generation timestamp. Both flow into the `metadata` block.
+//
+// Canonicalize is called on entry so output is deterministic, including
+// all keys and array elements.
+func RenderJSON(w io.Writer, res resolver.Result, resourceCount int, version string, now time.Time) error {
+	res = Canonicalize(res)
+
+	output := jsonOutput{
+		Version: "1.0",
+		Summary: jsonSummary{
+			PermissionCount: len(res.TotalApplyPerms),
+			ResourceCount:   resourceCount,
+			UnknownCount:    len(res.Unknowns),
+			UnresolvedCount: len(res.Unresolved),
+		},
+		PlanPermissions:        res.PlanPerms,
+		ApplyOnlyPermissions:   res.ApplyOnlyPerms,
+		TotalApplyPermissions:  res.TotalApplyPerms,
+		Resources:              make([]jsonResource, len(res.Resources)),
+		Diagnostics:            res.Diagnostics,
+		Unknowns:               res.Unknowns,
+		UnresolvedConditionals: res.Unresolved,
+		Metadata: jsonMetadata{
+			TFPermsVersion: version,
+			GeneratedAt:    now.UTC(),
+		},
+	}
+
+	for i, r := range res.Resources {
+		output.Resources[i] = jsonResource{
+			Type:       r.Type,
+			Name:       r.Name,
+			File:       r.File,
+			Line:       r.Line,
+			ModulePath: r.ModulePath,
+			// Requirement 5: sorted, deduplicated union of all permissions.
+			// ResourceResult.BasePerms and Applied[].Permissions are
+			// already sorted/deduped by Canonicalize; we just need to
+			// union them.
+			Permissions: unionResourcePerms(r),
+		}
+	}
+
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(output); err != nil {
+		return fmt.Errorf("encode json: %w", err)
+	}
+	return nil
+}
+
+// unionResourcePerms computes the sorted, deduplicated union of
+// r.BasePerms and every permission list in r.Applied.
+func unionResourcePerms(r resolver.ResourceResult) []string {
+	set := make(map[string]struct{})
+	for _, p := range r.BasePerms {
+		set[p] = struct{}{}
+	}
+	for _, a := range r.Applied {
+		for _, p := range a.Permissions {
+			set[p] = struct{}{}
+		}
+	}
+	// Re-use sortedSet from resolver? No, it's internal.
+	// But sortedStrings from reporter.go is available.
+	perms := make([]string, 0, len(set))
+	for p := range set {
+		perms = append(perms, p)
+	}
+	return sortedStrings(perms)
+}
