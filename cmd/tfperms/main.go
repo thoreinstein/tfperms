@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/spf13/cobra"
@@ -41,9 +42,10 @@ const rootDefaultDir = "."
 // are CLI surface — adding a third format means adding a third case in
 // runAnalyze, not a third value in a reporter-side enum.
 const (
-	formatFlat = "flat"
-	formatRole = "role"
-	formatJSON = "json"
+	formatFlat       = "flat"
+	formatRole       = "role"
+	formatJSON       = "json"
+	formatByResource = "by-resource"
 )
 
 // roleNameRE is the regex a --role-name value must match before the
@@ -86,8 +88,9 @@ func newRootCmd() *cobra.Command {
 	// would otherwise see cross-test bleed if a prior test left a
 	// stale --role-name in package state.
 	var (
-		format   string
-		roleName string
+		format     string
+		roleName   string
+		byResource bool
 	)
 	cmd := &cobra.Command{
 		Use:     "tfperms [path]",
@@ -113,6 +116,11 @@ func newRootCmd() *cobra.Command {
 		// before parser.LoadRecursive walks the disk — quicker
 		// feedback on a CI run that mistypes the role name.
 		PreRunE: func(cmd *cobra.Command, args []string) error {
+			effective, err := resolveFormat(format, byResource)
+			if err != nil {
+				return err
+			}
+			format = effective
 			return validateFormatFlags(format, roleName)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -124,10 +132,49 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
-	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list), role (GCP custom-role YAML), or json")
+	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list), by-resource (grouped by resource type), role (GCP custom-role YAML), or json")
 	cmd.Flags().StringVar(&roleName, "role-name", "", "GCP custom-role ID; whenever provided must match ^[a-zA-Z0-9_]{3,64}$, and is required with --format=role")
+	cmd.Flags().BoolVar(&byResource, "by-resource", false, "shorthand for --format=by-resource; mutually exclusive with --format")
 	cmd.AddCommand(newCatalogCmd())
 	return cmd
+}
+
+// resolveFormat reconciles the --format and --by-resource flags. The
+// --by-resource flag is sugar over --format=by-resource — it is
+// idiomatic for an investigative-mode invocation (tfperms ./infra
+// --by-resource) and matches the documented Journey 4 ergonomics. The
+// two flags can disagree: a user passing both --format=flat and
+// --by-resource has expressed conflicting intent and we surface the
+// conflict explicitly rather than silently picking one.
+//
+// Returns the effective format value to thread through validation and
+// dispatch:
+//
+//   - --by-resource alone returns formatByResource (overriding the
+//     default formatFlat).
+//   - --format=X without --by-resource returns X verbatim.
+//   - --format=by-resource and --by-resource together is permitted
+//     (they agree); --format=anything-else with --by-resource is a
+//     conflict.
+//
+// The conflict error names both flags so the user knows exactly which
+// pair to reconcile. validateFormatFlags handles the rest of the
+// format-value validation downstream.
+func resolveFormat(format string, byResource bool) (string, error) {
+	if !byResource {
+		return format, nil
+	}
+	if format == formatFlat {
+		// --by-resource alone (or together with the default
+		// --format=flat — cobra has no "user explicitly set this"
+		// signal here, so we treat the default value as
+		// "unspecified"). Promote to by-resource without complaint.
+		return formatByResource, nil
+	}
+	if format == formatByResource {
+		return formatByResource, nil
+	}
+	return "", fmt.Errorf("--by-resource conflicts with --format=%s; pass either --by-resource or --format=by-resource, not both", format)
 }
 
 // validateFormatFlags rejects --format / --role-name combinations the
@@ -136,10 +183,11 @@ func newRootCmd() *cobra.Command {
 //
 // Rules:
 //
-//   - --format must be either formatFlat, formatRole, or formatJSON. Any
-//     other value is a user typo (e.g. --format=yaml) and rejected with
-//     an explicit listing of the legal values rather than letting the
-//     dispatch branch silently fall through to the default formatter.
+//   - --format must be one of formatFlat, formatByResource, formatRole,
+//     or formatJSON. Any other value is a user typo (e.g. --format=yaml)
+//     and rejected with an explicit listing of the legal values rather
+//     than letting the dispatch branch silently fall through to the
+//     default formatter.
 //   - --format=role requires a non-empty --role-name. The role name is
 //     used as both the YAML title and the gcloud command's role-ID
 //     positional argument; a missing name would generate a file gcloud
@@ -156,10 +204,11 @@ func newRootCmd() *cobra.Command {
 // --role-name that does not match the GCP custom-role-ID regex.
 func validateFormatFlags(format, roleName string) error {
 	switch format {
-	case formatFlat, formatRole, formatJSON:
+	case formatFlat, formatByResource, formatRole, formatJSON:
 		// fine
 	default:
-		return fmt.Errorf("invalid --format %q: must be one of %q, %q, or %q", format, formatFlat, formatRole, formatJSON)
+		return fmt.Errorf("invalid --format %q: must be one of %q, %q, %q, or %q",
+			format, formatFlat, formatByResource, formatRole, formatJSON)
 	}
 	if format == formatRole && roleName == "" {
 		return fmt.Errorf("--format=%s requires --role-name", formatRole)
@@ -178,6 +227,8 @@ func validateFormatFlags(format, roleName string) error {
 // format selects the reporter:
 //
 //   - formatFlat → reporter.Render (the default human-readable list).
+//   - formatByResource → reporter.RenderByResource (grouped output,
+//     Journey 4).
 //   - formatRole → reporter.RenderRole (GCP custom-role YAML, using
 //     roleName as the title and gcloud role-ID).
 //   - formatJSON → reporter.RenderJSON (stable, versioned JSON output).
@@ -195,6 +246,14 @@ func validateFormatFlags(format, roleName string) error {
 // definition tfperms-ftq.1 calls "distinct resources (counting module
 // instances)". The role formatter does not consume the count
 // because a custom-role YAML is purely a permission listing.
+//
+// Path relativisation applies to every File field on the resolver
+// Result: parser.LoadRecursive emits absolute paths (it absolutises
+// dir before walking), and surfacing those to a user inspecting their
+// own configuration is noise — they want module-relative paths like
+// `modules/api/main.tf`. relativizeResult does that rewrite once,
+// after Resolve, so every formatter sees the same root-relative
+// shape.
 func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
@@ -206,7 +265,10 @@ func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	}
 	result := resolver.Resolve(resources, cat)
 	result.Diagnostics = relativizeDiags(diags, dir)
+	relativizeResult(&result, dir)
 	switch format {
+	case formatByResource:
+		return reporter.RenderByResource(w, result, len(resources))
 	case formatRole:
 		return reporter.RenderRole(w, result, roleName, version, date)
 	case formatJSON:
@@ -214,6 +276,58 @@ func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	default:
 		return reporter.Render(w, result, len(resources))
 	}
+}
+
+// relativizeResult rewrites every File field on res so the path is
+// relative to baseDir and uses forward slashes regardless of the host
+// OS. parser.LoadRecursive absolutises baseDir before walking, so
+// every File we see at this layer is an absolute path; surfacing
+// those to the user (in flat-list output, by-resource output, or
+// JSON) leaks developer-machine paths into reports that should read
+// the same on every host. Mirrors the relativisation the catalog
+// regression harness applies to its goldens — same problem, same
+// solution.
+//
+// A path that does not lie under baseDir is left unchanged. That
+// should not happen for fixtures rooted at baseDir, but emitting the
+// absolute path verbatim is a louder failure than a silent rewrite if
+// the parser ever surprises us.
+//
+// Diagnostics are not rewritten here because relativizeDiags handles
+// them at the conversion boundary (they originate from hcl.Diagnostic
+// and undergo a separate filter / convert pass).
+func relativizeResult(res *resolver.Result, baseDir string) {
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return
+	}
+	for i := range res.Unknowns {
+		res.Unknowns[i].File = relativiseAgainst(res.Unknowns[i].File, absBase)
+	}
+	for i := range res.Unresolved {
+		res.Unresolved[i].File = relativiseAgainst(res.Unresolved[i].File, absBase)
+	}
+	for i := range res.Resources {
+		res.Resources[i].File = relativiseAgainst(res.Resources[i].File, absBase)
+	}
+}
+
+// relativiseAgainst returns file as a forward-slashed path relative
+// to absBase, or file unchanged if filepath.Rel fails or the result
+// escapes absBase (a literal ".." segment, not just a ".." prefix —
+// "..foo" is a valid child name). Empty paths pass through.
+func relativiseAgainst(file, absBase string) string {
+	if file == "" {
+		return file
+	}
+	rel, err := filepath.Rel(absBase, file)
+	if err != nil {
+		return file
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return file
+	}
+	return filepath.ToSlash(rel)
 }
 
 // relativizeDiags converts hcl.Diagnostics to a slice of

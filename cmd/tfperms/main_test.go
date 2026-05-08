@@ -378,6 +378,10 @@ func TestValidateFormatFlags(t *testing.T) {
 		{name: "role with 65-char role-name", format: "role", roleName: strings.Repeat("a", 65), wantError: true},
 		{name: "role with 64-char role-name boundary", format: "role", roleName: strings.Repeat("a", 64), wantError: false},
 		{name: "role with 3-char role-name boundary", format: "role", roleName: "abc", wantError: false},
+		{name: "by-resource happy path", format: "by-resource", roleName: "", wantError: false},
+		{name: "by-resource ignores role-name with valid value", format: "by-resource", roleName: "my_role", wantError: false},
+		{name: "by-resource rejects invalid role-name", format: "by-resource", roleName: "a!b", wantError: true},
+		{name: "json happy path", format: "json", roleName: "", wantError: false},
 		{name: "unknown format", format: "yaml", roleName: "", wantError: true},
 		{name: "empty format", format: "", roleName: "", wantError: true},
 	}
@@ -652,5 +656,233 @@ resource "google_storage_bucket" "b" {
 	if !bytes.Equal(first, second) {
 		t.Errorf("JSON output not deterministic across runs.\n--- first ---\n%s\n--- second ---\n%s",
 			first, second)
+	}
+}
+
+// TestResolveFormat pins the --format / --by-resource interaction
+// rules. The defaulting cases (no --by-resource leaves --format
+// untouched) and the conflict-detection branch (--by-resource with
+// an explicit non-default --format other than by-resource) both flow
+// through resolveFormat, so driving the helper directly exercises
+// every branch without constructing a cobra command.
+func TestResolveFormat(t *testing.T) {
+	cases := []struct {
+		name       string
+		format     string
+		byResource bool
+		want       string
+		wantError  bool
+	}{
+		{name: "default flat alone", format: "flat", byResource: false, want: "flat"},
+		{name: "explicit json alone", format: "json", byResource: false, want: "json"},
+		{name: "by-resource alone overrides default", format: "flat", byResource: true, want: "by-resource"},
+		{name: "by-resource agrees with --format=by-resource", format: "by-resource", byResource: true, want: "by-resource"},
+		{name: "by-resource conflicts with --format=role", format: "role", byResource: true, wantError: true},
+		{name: "by-resource conflicts with --format=json", format: "json", byResource: true, wantError: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveFormat(tc.format, tc.byResource)
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("resolveFormat(%q, %v) returned nil error; want error", tc.format, tc.byResource)
+				}
+				if !strings.Contains(err.Error(), "--by-resource") || !strings.Contains(err.Error(), "--format") {
+					t.Errorf("error should name both --by-resource and --format; got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveFormat(%q, %v) unexpected error: %v", tc.format, tc.byResource, err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveFormat(%q, %v) = %q, want %q", tc.format, tc.byResource, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRootCommandByResourceFlag is the end-to-end wiring test for the
+// --by-resource shorthand. Going through cobra (rather than calling
+// resolveFormat directly) proves the flag declaration, PreRunE
+// reconciliation, and RunE dispatch are all wired up.
+func TestRootCommandByResourceFlag(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-by-resource-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir, "--by-resource"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	// The summary line must precede the by-resource group header.
+	if !strings.HasPrefix(got, "  ") {
+		t.Errorf("output missing summary indent prefix; got:\n%s", got)
+	}
+	if !strings.Contains(got, "  google_storage_bucket (1 instance):") {
+		t.Errorf("output missing by-resource group header.\noutput:\n%s", got)
+	}
+	// Instance row appears under the group header.
+	// The line number depends on the fixture's leading whitespace.
+	// Match on the type/name/file prefix and require any positive
+	// integer line number to follow.
+	if !strings.Contains(got, "    google_storage_bucket.primary (main.tf:") {
+		t.Errorf("output missing instance row with main.tf location.\noutput:\n%s", got)
+	}
+}
+
+// TestRootCommandByResourceFormatExplicit pins that --format=by-resource
+// works without --by-resource — they are both surfaces onto the same
+// renderer.
+func TestRootCommandByResourceFormatExplicit(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-by-resource-explicit"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir, "--format=by-resource"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "  google_storage_bucket (1 instance):") {
+		t.Errorf("output missing by-resource group header.\noutput:\n%s", got)
+	}
+}
+
+// TestRootCommandByResourceConflictsWithFormat pins the resolveFormat
+// conflict-detection branch at the CLI surface: the user passing both
+// --by-resource and --format=role gets an error before the pipeline
+// runs, naming both flags.
+func TestRootCommandByResourceConflictsWithFormat(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--by-resource", "--format=role", "--role-name=tfperms_test_role"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute with --by-resource and --format=role returned nil; expected conflict error.\noutput: %s", out.String())
+	}
+	if !strings.Contains(err.Error(), "--by-resource") {
+		t.Errorf("conflict error should mention --by-resource; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--format") {
+		t.Errorf("conflict error should mention --format; got: %v", err)
+	}
+}
+
+// TestRootCommandByResourceRelativisesFile pins the path-relativisation
+// contract for the by-resource format: an instance row's location
+// must be `main.tf:N`, never the absolute t.TempDir path.
+// parser.LoadRecursive produces absolute paths, and without the
+// relativizeResult pass the user would see the developer-machine
+// directory in their analysis output.
+func TestRootCommandByResourceRelativisesFile(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "fixture")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`
+resource "google_storage_bucket" "primary" {
+  name                        = "rel-bucket"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	t.Chdir(parent)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"fixture", "--by-resource"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	// Instance row should render with the input-relative path.
+	wantRow := "    google_storage_bucket.primary (main.tf:"
+	if !strings.Contains(got, wantRow) {
+		t.Errorf("instance row should use baseDir-relative path %q.\noutput:\n%s", wantRow, got)
+	}
+	// Absolute path leakage would surface as the t.TempDir parent
+	// prefix appearing in any line of the report.
+	if strings.Contains(got, parent) {
+		t.Errorf("absolute path %q leaked into output:\n%s", parent, got)
+	}
+}
+
+// TestRootCommandFlatRelativisesUnknownsAndResources pins that the
+// path-relativisation is universal — the flat formatter, JSON output,
+// and the unknowns / resources entries on every format see the same
+// root-relative paths after runAnalyze runs relativizeResult.
+//
+// The fixture mixes a catalogued resource (storage_bucket) and an
+// uncatalogued one (made_up_thing) so we can pin both the resources
+// and unknowns paths in a single run.
+func TestRootCommandFlatRelativisesUnknownsAndResources(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "fixture")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`
+resource "google_made_up_thing" "x" {
+  name = "nope"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	t.Chdir(parent)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"fixture"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	// Unknowns row should use baseDir-relative path.
+	wantRow := "    google_made_up_thing.x (main.tf:"
+	if !strings.Contains(got, wantRow) {
+		t.Errorf("unknowns row should use baseDir-relative path %q.\noutput:\n%s", wantRow, got)
+	}
+	if strings.Contains(got, parent) {
+		t.Errorf("absolute path %q leaked into output:\n%s", parent, got)
 	}
 }
