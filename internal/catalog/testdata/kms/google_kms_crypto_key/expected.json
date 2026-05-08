@@ -22,10 +22,12 @@
       "name": "data_key",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "cloudkms.cryptoKeys.get"
+      ],
+      "base_apply_only": [
         "cloudkms.cryptoKeyVersions.destroy",
         "cloudkms.cryptoKeys.create",
-        "cloudkms.cryptoKeys.get",
         "cloudkms.cryptoKeys.update"
       ],
       "applied": []

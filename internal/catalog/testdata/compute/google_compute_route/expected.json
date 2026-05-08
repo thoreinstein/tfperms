@@ -20,10 +20,12 @@
       "name": "egress",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
-        "compute.routes.create",
-        "compute.routes.delete",
+      "base_plan": [
         "compute.routes.get"
+      ],
+      "base_apply_only": [
+        "compute.routes.create",
+        "compute.routes.delete"
       ],
       "applied": []
     }

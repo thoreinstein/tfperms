@@ -22,10 +22,12 @@
       "name": "primary",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "bigquery.datasets.get"
+      ],
+      "base_apply_only": [
         "bigquery.datasets.create",
         "bigquery.datasets.delete",
-        "bigquery.datasets.get",
         "bigquery.datasets.update"
       ],
       "applied": []

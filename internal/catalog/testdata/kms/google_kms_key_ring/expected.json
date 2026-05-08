@@ -18,9 +18,11 @@
       "name": "main",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
-        "cloudkms.keyRings.create",
+      "base_plan": [
         "cloudkms.keyRings.get"
+      ],
+      "base_apply_only": [
+        "cloudkms.keyRings.create"
       ],
       "applied": []
     }

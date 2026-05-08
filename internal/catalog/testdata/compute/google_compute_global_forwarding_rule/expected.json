@@ -24,11 +24,13 @@
       "name": "https",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.globalForwardingRules.get"
+      ],
+      "base_apply_only": [
         "compute.globalAddresses.use",
         "compute.globalForwardingRules.create",
         "compute.globalForwardingRules.delete",
-        "compute.globalForwardingRules.get",
         "compute.globalForwardingRules.update"
       ],
       "applied": []

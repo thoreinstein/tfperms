@@ -22,10 +22,12 @@
       "name": "vip",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.addresses.get"
+      ],
+      "base_apply_only": [
         "compute.addresses.create",
         "compute.addresses.delete",
-        "compute.addresses.get",
         "compute.addresses.setLabels"
       ],
       "applied": []

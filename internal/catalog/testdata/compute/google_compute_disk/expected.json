@@ -24,10 +24,12 @@
       "name": "data",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.disks.get"
+      ],
+      "base_apply_only": [
         "compute.disks.create",
         "compute.disks.delete",
-        "compute.disks.get",
         "compute.disks.setLabels",
         "compute.disks.update"
       ],

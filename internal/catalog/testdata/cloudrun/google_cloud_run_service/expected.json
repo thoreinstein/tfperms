@@ -24,11 +24,13 @@
       "name": "api",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "run.services.get"
+      ],
+      "base_apply_only": [
         "iam.serviceAccounts.actAs",
         "run.services.create",
         "run.services.delete",
-        "run.services.get",
         "run.services.update"
       ],
       "applied": []

@@ -22,10 +22,12 @@
       "name": "main",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.routers.get"
+      ],
+      "base_apply_only": [
         "compute.routers.create",
         "compute.routers.delete",
-        "compute.routers.get",
         "compute.routers.update"
       ],
       "applied": []

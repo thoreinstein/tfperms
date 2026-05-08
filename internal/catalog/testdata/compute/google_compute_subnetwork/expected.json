@@ -22,10 +22,12 @@
       "name": "primary",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.subnetworks.get"
+      ],
+      "base_apply_only": [
         "compute.subnetworks.create",
         "compute.subnetworks.delete",
-        "compute.subnetworks.get",
         "compute.subnetworks.update"
       ],
       "applied": []

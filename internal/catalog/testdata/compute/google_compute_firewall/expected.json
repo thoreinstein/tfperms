@@ -22,10 +22,12 @@
       "name": "allow_ssh",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.firewalls.get"
+      ],
+      "base_apply_only": [
         "compute.firewalls.create",
         "compute.firewalls.delete",
-        "compute.firewalls.get",
         "compute.firewalls.update"
       ],
       "applied": []

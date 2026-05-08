@@ -24,10 +24,12 @@
       "name": "default",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.instanceTemplates.get"
+      ],
+      "base_apply_only": [
         "compute.instanceTemplates.create",
         "compute.instanceTemplates.delete",
-        "compute.instanceTemplates.get",
         "compute.subnetworks.use",
         "iam.serviceAccounts.actAs"
       ],

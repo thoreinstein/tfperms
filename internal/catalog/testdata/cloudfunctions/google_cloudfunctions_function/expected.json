@@ -26,10 +26,12 @@
       "name": "hello",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "cloudfunctions.functions.get"
+      ],
+      "base_apply_only": [
         "cloudfunctions.functions.create",
         "cloudfunctions.functions.delete",
-        "cloudfunctions.functions.get",
         "cloudfunctions.functions.update",
         "iam.serviceAccounts.actAs",
         "storage.objects.get"

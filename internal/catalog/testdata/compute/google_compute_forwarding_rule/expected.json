@@ -24,11 +24,13 @@
       "name": "internal",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.forwardingRules.get"
+      ],
+      "base_apply_only": [
         "compute.addresses.use",
         "compute.forwardingRules.create",
         "compute.forwardingRules.delete",
-        "compute.forwardingRules.get",
         "compute.forwardingRules.update"
       ],
       "applied": []

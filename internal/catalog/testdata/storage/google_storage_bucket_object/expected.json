@@ -20,9 +20,11 @@
       "name": "config",
       "file": "main.tf",
       "line": 12,
-      "base_perms": [
+      "base_plan": [
+        "storage.objects.get"
+      ],
+      "base_apply_only": [
         "storage.objects.create",
-        "storage.objects.get",
         "storage.objects.update"
       ],
       "applied": []

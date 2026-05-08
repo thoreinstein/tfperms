@@ -241,44 +241,51 @@ type UnresolvedConditional struct {
 // Root-level resources have a nil/empty ModulePath; the JSON tag is
 // `omitempty`, mirroring UnresolvedConditional.
 //
-// BasePerms is the sorted, deduplicated effective permission set the
-// catalog's base entry contributed for this resource — i.e. Plan ∪
-// Create ∪ Update ∪ Delete with prevent_destroy filtering applied,
-// matching the resolver's global-set semantics. A
-// `lifecycle { prevent_destroy = true }` resource will not include
-// its Delete permissions in BasePerms. Data-source entries contribute
-// only their Plan slice (the catalog's read-only contract); their
-// BasePerms therefore contains only the read permissions.
+// BasePlan is the sorted, deduplicated set of permissions the
+// catalog's base entry contributed to this resource at plan stage —
+// the entry's Plan slice. BaseApplyOnly is `(Create ∪ Update ∪ Delete)
+// \ Plan` for the same base entry, with prevent_destroy filtering
+// applied to the Delete slice. Splitting the contribution into two
+// slices preserves the same plan / apply-only distinction the global
+// PlanPerms / ApplyOnlyPerms sets enforce, so the by-resource reporter
+// can render per-stage permission lists without re-running the
+// resolver. Data-source entries contribute only Plan (the catalog's
+// read-only contract); their BaseApplyOnly is therefore always empty.
 //
 // Applied is the list of catalog conditionals whose `when:` predicate
 // matched this resource. Each AppliedConditional carries the catalog's
 // literal When map (deep-cloned so the catalog's storage cannot be
 // mutated through the result) plus the conditional's sorted,
-// deduplicated permission contribution with prevent_destroy filtering
-// applied — same effective-set semantics as BasePerms, so the
-// per-resource attribution view matches the global sets exactly.
+// deduplicated Plan / ApplyOnly contributions — same per-stage split
+// as BasePlan / BaseApplyOnly so the per-resource attribution view
+// matches the global sets exactly.
 type ResourceResult struct {
-	Type       string               `json:"type"`
-	Name       string               `json:"name"`
-	File       string               `json:"file"`
-	Line       int                  `json:"line"`
-	ModulePath []string             `json:"module_path,omitempty"`
-	BasePerms  []string             `json:"base_perms"`
-	Applied    []AppliedConditional `json:"applied"`
+	Type          string               `json:"type"`
+	Name          string               `json:"name"`
+	File          string               `json:"file"`
+	Line          int                  `json:"line"`
+	ModulePath    []string             `json:"module_path,omitempty"`
+	BasePlan      []string             `json:"base_plan"`
+	BaseApplyOnly []string             `json:"base_apply_only"`
+	Applied       []AppliedConditional `json:"applied"`
 }
 
 // AppliedConditional describes a catalog conditional whose `when:`
 // predicate matched a resource. When is the literal predicate map
 // from the catalog, deep-cloned at construction so downstream mutation
 // of the result cannot reach back into the catalog's loaded storage.
-// Permissions is the sorted, deduplicated effective permission set
-// the conditional contributed for this resource, with prevent_destroy
-// filtering applied to match BasePerms's semantics — the union of
-// Plan ∪ Create ∪ Update ∪ Delete (minus Delete when prevent_destroy
-// is set on the resource).
+//
+// Plan is the sorted, deduplicated set of permissions the conditional
+// contributed at plan stage (its Plan slice). ApplyOnly is the
+// conditional's `(Create ∪ Update ∪ Delete) \ Plan` with
+// prevent_destroy filtering applied to Delete. Together they mirror
+// the per-stage split on ResourceResult.BasePlan / BaseApplyOnly so
+// the by-resource reporter can render plan vs apply contributions per
+// firing conditional without re-running the resolver.
 type AppliedConditional struct {
-	When        map[string]any `json:"when"`
-	Permissions []string       `json:"permissions"`
+	When      map[string]any `json:"when"`
+	Plan      []string       `json:"plan"`
+	ApplyOnly []string       `json:"apply_only"`
 }
 
 // Resolve combines the parsed resource set with the merged catalog and
@@ -325,30 +332,38 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 
 		// Per-resource attribution: capture the catalog contribution
 		// of this resource so the by-resource reporter format
-		// (tfperms-ftq.2) does not have to re-resolve. BasePerms and
-		// every Applied entry use effective-set semantics — the same
-		// Plan ∪ Create ∪ Update ∪ Delete union (minus Delete on
-		// prevent_destroy) the global sets are built from. Applied is
-		// allocated as an empty (non-nil) slice so a resource with no
-		// firing conditionals still marshals as `[]` in JSON, matching
-		// the field-invariants contract for top-level slices.
+		// (tfperms-ftq.2) does not have to re-resolve. BasePlan /
+		// BaseApplyOnly (and each Applied entry's Plan / ApplyOnly)
+		// use the same plan vs apply-only split the global PlanPerms /
+		// ApplyOnlyPerms sets enforce: BaseApplyOnly is computed as
+		// (Create ∪ Update ∪ Delete) \ Plan (with prevent_destroy
+		// filtering applied to Delete), so a `.get` permission listed
+		// under both Plan and Update on a catalog entry surfaces in
+		// BasePlan only — never in BaseApplyOnly. Applied is allocated
+		// as an empty (non-nil) slice so a resource with no firing
+		// conditionals still marshals as `[]` in JSON, matching the
+		// field-invariants contract for top-level slices.
+		basePlan, baseApplyOnly := splitPermStrings(entry.base, r.PreventDestroy)
 		rr := ResourceResult{
-			Type:       r.Type,
-			Name:       r.Name,
-			File:       r.File,
-			Line:       r.Line,
-			ModulePath: cloneModulePath(r.ModulePath),
-			BasePerms:  effectivePermStrings(entry.base, r.PreventDestroy),
-			Applied:    []AppliedConditional{},
+			Type:          r.Type,
+			Name:          r.Name,
+			File:          r.File,
+			Line:          r.Line,
+			ModulePath:    cloneModulePath(r.ModulePath),
+			BasePlan:      basePlan,
+			BaseApplyOnly: baseApplyOnly,
+			Applied:       []AppliedConditional{},
 		}
 
 		for _, cond := range entry.conditionals {
 			matched, missing := matchesConditional(r.Attrs, cond.when)
 			if matched {
 				applyPermissionSet(plan, apply, cond.permissions, r.PreventDestroy)
+				condPlan, condApplyOnly := splitPermStrings(cond.permissions, r.PreventDestroy)
 				rr.Applied = append(rr.Applied, AppliedConditional{
-					When:        cloneWhen(cond.when),
-					Permissions: effectivePermStrings(cond.permissions, r.PreventDestroy),
+					When:      cloneWhen(cond.when),
+					Plan:      condPlan,
+					ApplyOnly: condApplyOnly,
 				})
 			}
 			for _, attr := range missing {
@@ -630,24 +645,35 @@ func cloneModulePath(path []string) []string {
 	return out
 }
 
-// effectivePermStrings returns the sorted, deduplicated union of
-// every stage in perms (Plan ∪ Create ∪ Update ∪ Delete), with the
-// Delete slice suppressed when preventDestroy is true. This mirrors
-// the staging rules in applyPermissionSet — the per-resource
-// attribution view (ResourceResult.BasePerms,
-// AppliedConditional.Permissions) thus matches the global PlanPerms /
-// ApplyOnlyPerms / TotalApplyPerms sets exactly. Always returns a
-// non-nil slice so JSON marshals as `[]` rather than `null`, matching
-// the Result field invariants.
-func effectivePermStrings(perms catalog.PermissionSet, preventDestroy bool) []string {
-	set := make(map[string]struct{})
-	addAll(set, perms.Plan)
-	addAll(set, perms.Create)
-	addAll(set, perms.Update)
+// splitPermStrings classifies the catalog stages of perms into the
+// per-resource attribution layer's plan vs apply-only split — the
+// same partitioning the global PlanPerms / ApplyOnlyPerms sets
+// enforce, but local to a single base entry or conditional rather
+// than across every resource in the configuration.
+//
+//   - planPerms is the sorted, deduplicated copy of perms.Plan.
+//   - applyOnlyPerms is `(Create ∪ Update ∪ Delete) \ Plan`, with the
+//     Delete slice suppressed when preventDestroy is true.
+//
+// A `.get` permission listed under both Plan and Update on a single
+// catalog entry therefore appears only in planPerms, never in
+// applyOnlyPerms — matching the resolver's global-set arithmetic so
+// the by-resource reporter cannot disagree with the flat-list summary
+// on which stage a permission "belongs" to. Both return values are
+// non-nil empty slices when their respective stage contributes
+// nothing, so JSON marshals as `[]` rather than `null`.
+func splitPermStrings(perms catalog.PermissionSet, preventDestroy bool) (planPerms, applyOnlyPerms []string) {
+	planSet := make(map[string]struct{})
+	addAll(planSet, perms.Plan)
+
+	applySet := make(map[string]struct{})
+	addAll(applySet, perms.Create)
+	addAll(applySet, perms.Update)
 	if !preventDestroy {
-		addAll(set, perms.Delete)
+		addAll(applySet, perms.Delete)
 	}
-	return sortedSet(set)
+
+	return sortedSet(planSet), subtractSorted(applySet, planSet)
 }
 
 // cloneWhen returns a defensive copy of a catalog Conditional.When

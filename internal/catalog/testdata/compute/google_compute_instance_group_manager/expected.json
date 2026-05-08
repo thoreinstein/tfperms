@@ -26,10 +26,12 @@
       "name": "managed",
       "file": "main.tf",
       "line": 4,
-      "base_perms": [
+      "base_plan": [
+        "compute.instanceGroupManagers.get"
+      ],
+      "base_apply_only": [
         "compute.instanceGroupManagers.create",
         "compute.instanceGroupManagers.delete",
-        "compute.instanceGroupManagers.get",
         "compute.instanceGroupManagers.update",
         "compute.instanceTemplates.useReadOnly",
         "iam.serviceAccounts.actAs"
