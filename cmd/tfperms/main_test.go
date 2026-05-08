@@ -1045,7 +1045,7 @@ resource "google_made_up_thing" "x" {
 // TestRootCommandQuietFlagSuppressesDiagnosticsFlat exercises the
 // long form --quiet flag against the default flat format. The summary
 // line must still report the unknowns/unresolved counts (integration
-// tooling that grep's the first line should still see that diagnostic
+// tooling that greps the first line should still see that diagnostic
 // findings exist) but the section headers and detail rows must be
 // fully absent from the output.
 func TestRootCommandQuietFlagSuppressesDiagnosticsFlat(t *testing.T) {

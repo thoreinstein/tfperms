@@ -158,7 +158,7 @@ func newRootCmd() *cobra.Command {
 	// formats; the role and json formats are unaffected (the JSON
 	// schema is a stability surface, and the role formatter does not
 	// emit unknowns / unresolved sections at all). The summary line
-	// keeps the accurate counts so downstream tooling that grep's the
+	// keeps the accurate counts so downstream tooling that greps the
 	// first line still detects diagnostic findings under --quiet.
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "suppress unknown-resource and unresolved-conditional sections in flat and by-resource output (no effect on role/json)")
 	cmd.AddCommand(newCatalogCmd())
