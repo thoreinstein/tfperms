@@ -124,7 +124,7 @@ func newRootCmd() *cobra.Command {
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list) or role (GCP custom-role YAML)")
-	cmd.Flags().StringVar(&roleName, "role-name", "", "role identifier for --format=role; must match ^[a-zA-Z0-9_]{3,64}$")
+	cmd.Flags().StringVar(&roleName, "role-name", "", "GCP custom-role ID; whenever provided must match ^[a-zA-Z0-9_]{3,64}$, and is required with --format=role")
 	cmd.AddCommand(newCatalogCmd())
 	return cmd
 }
@@ -149,9 +149,10 @@ func newRootCmd() *cobra.Command {
 //     gets a clear error rather than having the name silently
 //     ignored — the most user-hostile of the available behaviours.
 //
-// Errors are wrapped with "invalid flag" prefixes so the user sees the
-// flag name in the message (cobra's default error printing does not
-// include it).
+// Every returned error names the offending flag (cobra's default
+// error printing does not include the flag name): an unknown
+// --format value, a missing --role-name when --format=role, or a
+// --role-name that does not match the GCP custom-role-ID regex.
 func validateFormatFlags(format, roleName string) error {
 	switch format {
 	case formatFlat, formatRole:
