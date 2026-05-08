@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/spf13/cobra"
@@ -33,6 +34,27 @@ var (
 // "what does no-arg mean" rule in one place.
 const rootDefaultDir = "."
 
+// Output format selectors for the --format flag. `flat` is the default
+// (the human-readable Render output that shipped in tfperms-ftq.1);
+// `role` emits a GCP custom-role YAML document via reporter.RenderRole.
+// Constants live here rather than in the reporter package because they
+// are CLI surface — adding a third format means adding a third case in
+// runAnalyze, not a third value in a reporter-side enum.
+const (
+	formatFlat = "flat"
+	formatRole = "role"
+)
+
+// roleNameRE is the regex a --role-name value must match before the
+// `role` formatter will accept it. The pattern matches GCP's custom-
+// role-ID constraint (alphanumeric and underscore, 3 to 64 chars
+// inclusive) so a user copy-pasting the rendered file's `gcloud iam
+// roles create <ID> --file=role.yaml` command cannot generate a name
+// the API will reject. Compiled at package load (not per-invocation)
+// because newRootCmd is called many times across the test suite and
+// recompiling the regex per construction shows up in test timings.
+var roleNameRE = regexp.MustCompile(`^[a-zA-Z0-9_]{3,64}$`)
+
 // newRootCmd returns the `tfperms` cobra command tree.
 //
 // The root command analyses a Terraform configuration and prints the
@@ -56,6 +78,16 @@ const rootDefaultDir = "."
 // The catalog and `version` subcommands remain as-is; this RunE
 // addition is the first time the root command itself is runnable.
 func newRootCmd() *cobra.Command {
+	// Flag-backing variables are scoped to this constructor (closed
+	// over by RunE / PreRunE) rather than declared at package level
+	// so each newRootCmd call gets a fresh zero value — important
+	// because the test suite builds a new root command per test and
+	// would otherwise see cross-test bleed if a prior test left a
+	// stale --role-name in package state.
+	var (
+		format   string
+		roleName string
+	)
 	cmd := &cobra.Command{
 		Use:     "tfperms [path]",
 		Short:   "Static IAM permission analysis for Terraform GCP configs",
@@ -74,32 +106,93 @@ func newRootCmd() *cobra.Command {
 		// error to stderr. main() is the single layer that prints
 		// the error; without this, the message would appear twice.
 		SilenceErrors: true,
+		// PreRunE validates the --format / --role-name combination
+		// before the pipeline runs. Putting the validation here (not
+		// inside runAnalyze) means a misconfigured invocation fails
+		// before parser.LoadRecursive walks the disk — quicker
+		// feedback on a CI run that mistypes the role name.
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			return validateFormatFlags(format, roleName)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := rootDefaultDir
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runAnalyze(cmd.OutOrStdout(), dir)
+			return runAnalyze(cmd.OutOrStdout(), dir, format, roleName)
 		},
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
+	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list) or role (GCP custom-role YAML)")
+	cmd.Flags().StringVar(&roleName, "role-name", "", "role identifier for --format=role; must match ^[a-zA-Z0-9_]{3,64}$")
 	cmd.AddCommand(newCatalogCmd())
 	return cmd
 }
 
+// validateFormatFlags rejects --format / --role-name combinations the
+// pipeline cannot satisfy. Split out from PreRunE so unit tests can
+// drive the validation without constructing a cobra command.
+//
+// Rules:
+//
+//   - --format must be either formatFlat or formatRole. Any other value
+//     is a user typo (e.g. --format=yaml) and rejected with an explicit
+//     listing of the legal values rather than letting the dispatch
+//     branch silently fall through to the default formatter.
+//   - --format=role requires a non-empty --role-name. The role name is
+//     used as both the YAML title and the gcloud command's role-ID
+//     positional argument; a missing name would generate a file gcloud
+//     cannot apply.
+//   - When --role-name is provided (regardless of --format), it must
+//     match roleNameRE. We validate the value even under --format=flat
+//     so a user who sets the name first and forgets to flip --format
+//     gets a clear error rather than having the name silently
+//     ignored — the most user-hostile of the available behaviours.
+//
+// Errors are wrapped with "invalid flag" prefixes so the user sees the
+// flag name in the message (cobra's default error printing does not
+// include it).
+func validateFormatFlags(format, roleName string) error {
+	switch format {
+	case formatFlat, formatRole:
+		// fine
+	default:
+		return fmt.Errorf("invalid --format %q: must be one of %q or %q", format, formatFlat, formatRole)
+	}
+	if format == formatRole && roleName == "" {
+		return fmt.Errorf("--format=%s requires --role-name", formatRole)
+	}
+	if roleName != "" && !roleNameRE.MatchString(roleName) {
+		return fmt.Errorf("invalid --role-name %q: must match %s", roleName, roleNameRE.String())
+	}
+	return nil
+}
+
 // runAnalyze executes the parser → catalog → resolver → reporter
-// pipeline against dir and writes the flat-list report to w. Split out
-// from RunE so tests can drive the pipeline directly without
-// constructing a cobra command, and so a future `tfperms <path>
-// --format=...` flag has an obvious place to dispatch on format
-// without bloating the cobra wiring.
+// pipeline against dir and writes the requested report format to w.
+// Split out from RunE so tests can drive the pipeline directly without
+// constructing a cobra command.
+//
+// format selects the reporter:
+//
+//   - formatFlat → reporter.Render (the default human-readable list).
+//   - formatRole → reporter.RenderRole (GCP custom-role YAML, using
+//     roleName as the title and gcloud role-ID).
+//
+// Validation of the format / roleName combination is the caller's
+// responsibility — newRootCmd's PreRunE handles it before runAnalyze
+// is reached. A direct test caller passing an unknown format gets the
+// formatFlat fallback rather than an error, because runAnalyze should
+// never be the layer that rejects user input (that is what PreRunE is
+// for, and a direct programmatic caller has no user-input surface).
 //
 // The resource count passed to reporter.Render is len(resources) —
 // every distinct resource block produced by parser.LoadRecursive,
 // counting each module-instance copy as its own resource. This is the
 // definition tfperms-ftq.1 calls "distinct resources (counting module
-// instances)".
-func runAnalyze(w io.Writer, dir string) error {
+// instances)". The role formatter does not consume the count
+// because a custom-role YAML is purely a permission listing.
+func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
 		return fmt.Errorf("load %q: %w", dir, err)
@@ -110,6 +203,9 @@ func runAnalyze(w io.Writer, dir string) error {
 	}
 	result := resolver.Resolve(resources, cat)
 	result.Diagnostics = relativizeDiags(diags, dir)
+	if format == formatRole {
+		return reporter.RenderRole(w, result, roleName, version, date)
+	}
 	return reporter.Render(w, result, len(resources))
 }
 
