@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_bigquery_dataset",
+      "name": "primary",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "bigquery.datasets.create",
+        "bigquery.datasets.delete",
+        "bigquery.datasets.get",
+        "bigquery.datasets.update"
+      ],
+      "applied": []
+    }
+  ]
 }

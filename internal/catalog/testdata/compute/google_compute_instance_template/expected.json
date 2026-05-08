@@ -17,5 +17,21 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_instance_template",
+      "name": "default",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.instanceTemplates.create",
+        "compute.instanceTemplates.delete",
+        "compute.instanceTemplates.get",
+        "compute.subnetworks.use",
+        "iam.serviceAccounts.actAs"
+      ],
+      "applied": []
+    }
+  ]
 }

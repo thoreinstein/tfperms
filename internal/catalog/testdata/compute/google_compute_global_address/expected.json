@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_global_address",
+      "name": "lb_ip",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.globalAddresses.create",
+        "compute.globalAddresses.delete",
+        "compute.globalAddresses.get",
+        "compute.globalAddresses.setLabels"
+      ],
+      "applied": []
+    }
+  ]
 }

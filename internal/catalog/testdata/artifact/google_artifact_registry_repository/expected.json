@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_artifact_registry_repository",
+      "name": "docker",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "artifactregistry.repositories.create",
+        "artifactregistry.repositories.delete",
+        "artifactregistry.repositories.get",
+        "artifactregistry.repositories.update"
+      ],
+      "applied": []
+    }
+  ]
 }

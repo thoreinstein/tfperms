@@ -1428,6 +1428,253 @@ func TestResolveUnresolvedReasonFallback(t *testing.T) {
 	}})
 }
 
+// TestResolveResourcesPopulatedBaseOnly verifies the simplest path
+// through the per-resource attribution layer: a catalog hit with no
+// firing conditionals produces a single ResourceResult carrying the
+// effective base permission set (Plan ∪ Create ∪ Update ∪ Delete with
+// prevent_destroy filtering, sorted) and an empty (non-nil) Applied
+// slice. Pins ResourceResult identity-field copying and the
+// "no-conditionals → empty []" JSON shape contract.
+func TestResolveResourcesPopulatedBaseOnly(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		File: "main.tf",
+		Line: 7,
+	}}, cat)
+
+	if len(res.Resources) != 1 {
+		t.Fatalf("Resources length: got %d, want 1; full=%#v", len(res.Resources), res.Resources)
+	}
+	got := res.Resources[0]
+	want := ResourceResult{
+		Type:      "google_storage_bucket",
+		Name:      "primary",
+		File:      "main.tf",
+		Line:      7,
+		BasePerms: []string{"storage.buckets.create", "storage.buckets.delete", "storage.buckets.get", "storage.buckets.update"},
+		Applied:   []AppliedConditional{},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Resources[0] mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// TestResolveResourcesPopulatedConditionalFires verifies that a
+// resource whose `when:` predicate matches surfaces an
+// AppliedConditional carrying the catalog's literal When map and the
+// effective permission set the conditional contributed. The
+// conditional's Permissions value uses the same effective-set
+// semantics as BasePerms (Plan ∪ Create ∪ Update ∪ Delete sorted).
+func TestResolveResourcesPopulatedConditionalFires(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan:   []string{"storage.buckets.getIamPolicy"},
+			Create: []string{"storage.buckets.setIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		File: "main.tf",
+		Line: 12,
+		Attrs: map[string]cty.Value{
+			"uniform_bucket_level_access": cty.True,
+		},
+	}}, cat)
+
+	if len(res.Resources) != 1 {
+		t.Fatalf("Resources length: got %d, want 1; full=%#v", len(res.Resources), res.Resources)
+	}
+	got := res.Resources[0]
+	want := ResourceResult{
+		Type:      "google_storage_bucket",
+		Name:      "primary",
+		File:      "main.tf",
+		Line:      12,
+		BasePerms: []string{"storage.buckets.create", "storage.buckets.delete", "storage.buckets.get", "storage.buckets.update"},
+		Applied: []AppliedConditional{
+			{
+				When: map[string]any{"uniform_bucket_level_access": true},
+				Permissions: []string{
+					"storage.buckets.getIamPolicy",
+					"storage.buckets.setIamPolicy",
+				},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Resources[0] mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// TestResolveResourcesPreventDestroyFiltersDelete verifies that a
+// resource carrying `lifecycle { prevent_destroy = true }` does not
+// include its Delete permissions in BasePerms — matching the global
+// PlanPerms / TotalApplyPerms semantics. The per-resource attribution
+// view must agree with the global sets, otherwise the by-resource
+// reporter would misrepresent what `terraform apply` actually needs.
+func TestResolveResourcesPreventDestroyFiltersDelete(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+	res := Resolve([]parser.Resource{{
+		Kind:           "resource",
+		Type:           "google_storage_bucket",
+		Name:           "primary",
+		File:           "main.tf",
+		Line:           4,
+		PreventDestroy: true,
+	}}, cat)
+
+	if len(res.Resources) != 1 {
+		t.Fatalf("Resources length: got %d, want 1; full=%#v", len(res.Resources), res.Resources)
+	}
+	want := []string{"storage.buckets.create", "storage.buckets.get", "storage.buckets.update"}
+	if !reflect.DeepEqual(res.Resources[0].BasePerms, want) {
+		t.Errorf("BasePerms mismatch\n got: %#v\nwant: %#v", res.Resources[0].BasePerms, want)
+	}
+}
+
+// TestResolveResourcesUnknownExcluded verifies that resources whose
+// type is not in the catalog do NOT contribute to Resources — they
+// flow through Unknowns instead. A ResourceResult with no catalog
+// entry has no permissions to attribute.
+func TestResolveResourcesUnknownExcluded(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_unknown_thing",
+		Name: "primary",
+		File: "main.tf",
+		Line: 9,
+	}}, cat)
+
+	if len(res.Resources) != 0 {
+		t.Errorf("Resources should be empty for unknown type; got %#v", res.Resources)
+	}
+	if len(res.Unknowns) != 1 {
+		t.Errorf("Unknowns should contain the unknown resource; got %#v", res.Unknowns)
+	}
+}
+
+// TestResolveResourcesDisambiguatesReusedModuleInstantiations pins
+// the same disambiguation contract UnresolvedConditional carries: two
+// `module "x" { source = "./mod" }` and `module "y" { source = "./mod" }`
+// instantiations of the same shared module produce two
+// ResourceResult rows with identical (Type, Name, File, Line) tuples
+// distinguished only by ModulePath. Without ModulePath participating
+// in the result identity, the reporter's by-resource format would
+// silently collapse two distinct call sites into a single row.
+func TestResolveResourcesDisambiguatesReusedModuleInstantiations(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+	res := Resolve([]parser.Resource{
+		{
+			Kind:       "resource",
+			Type:       "google_storage_bucket",
+			Name:       "primary",
+			File:       "/abs/mod/main.tf",
+			Line:       3,
+			ModulePath: []string{"x"},
+		},
+		{
+			Kind:       "resource",
+			Type:       "google_storage_bucket",
+			Name:       "primary",
+			File:       "/abs/mod/main.tf",
+			Line:       3,
+			ModulePath: []string{"y"},
+		},
+	}, cat)
+
+	if len(res.Resources) != 2 {
+		t.Fatalf("Resources length: got %d, want 2 (one per module instantiation); full=%#v",
+			len(res.Resources), res.Resources)
+	}
+	wantPaths := [][]string{{"x"}, {"y"}}
+	got0, got1 := res.Resources[0].ModulePath, res.Resources[1].ModulePath
+	// Resolve emits in source order; both pre-Canonicalize and
+	// post-Canonicalize orderings yield ["x"] before ["y"] (lexicographic
+	// segment compare), so we can assert the order directly.
+	if !reflect.DeepEqual(got0, wantPaths[0]) || !reflect.DeepEqual(got1, wantPaths[1]) {
+		t.Errorf("ModulePath sequence mismatch\n got: [%v %v]\nwant: %v",
+			got0, got1, wantPaths)
+	}
+}
+
+// TestResolveResourcesClonesModulePath pins that ResourceResult
+// shares no backing array with the parser's Resource.ModulePath, so
+// downstream mutation cannot reach back into the parser's cached
+// state. cloneModulePath is the barrier; this test fails if Resolve
+// ever drops it for the per-resource attribution layer.
+func TestResolveResourcesClonesModulePath(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+	parserPath := []string{"original_module"}
+	res := Resolve([]parser.Resource{{
+		Kind:       "resource",
+		Type:       "google_storage_bucket",
+		Name:       "primary",
+		File:       "main.tf",
+		Line:       3,
+		ModulePath: parserPath,
+	}}, cat)
+
+	if len(res.Resources) != 1 {
+		t.Fatalf("Resources length: got %d, want 1", len(res.Resources))
+	}
+	if &res.Resources[0].ModulePath[0] == &parserPath[0] {
+		t.Errorf("ResourceResult.ModulePath shares backing array with parser path; cloneModulePath dropped")
+	}
+	res.Resources[0].ModulePath[0] = "mutated"
+	if parserPath[0] != "original_module" {
+		t.Errorf("mutating ResourceResult.ModulePath leaked into parser slice; got %q, want %q",
+			parserPath[0], "original_module")
+	}
+}
+
+// TestResolveResourcesClonesWhen pins that AppliedConditional.When
+// shares no backing map with the catalog's Conditional.When, so
+// downstream mutation cannot reach back into the catalog's loaded
+// storage. cloneWhen is the barrier; this test fails if Resolve ever
+// drops it.
+func TestResolveResourcesClonesWhen(t *testing.T) {
+	catalogWhen := map[string]any{"uniform_bucket_level_access": true}
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: catalogWhen,
+		Permissions: catalog.PermissionSet{
+			Plan: []string{"storage.buckets.getIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		File: "main.tf",
+		Line: 3,
+		Attrs: map[string]cty.Value{
+			"uniform_bucket_level_access": cty.True,
+		},
+	}}, cat)
+
+	if len(res.Resources) != 1 || len(res.Resources[0].Applied) != 1 {
+		t.Fatalf("expected one Resources entry with one Applied conditional; got %#v", res.Resources)
+	}
+	res.Resources[0].Applied[0].When["uniform_bucket_level_access"] = false
+	if catalogWhen["uniform_bucket_level_access"] != true {
+		t.Errorf("mutating AppliedConditional.When leaked into catalog map; got %v, want true",
+			catalogWhen["uniform_bucket_level_access"])
+	}
+}
+
 // singleResourceCatalog returns a Catalog with one ResourceEntry for
 // google_storage_bucket carrying the standard plan/create/update/delete
 // permissions. Conditionals override is appended verbatim. Used to

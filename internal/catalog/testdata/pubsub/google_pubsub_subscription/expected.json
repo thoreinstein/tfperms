@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_pubsub_subscription",
+      "name": "events",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "pubsub.subscriptions.create",
+        "pubsub.subscriptions.delete",
+        "pubsub.subscriptions.get",
+        "pubsub.subscriptions.update"
+      ],
+      "applied": []
+    }
+  ]
 }

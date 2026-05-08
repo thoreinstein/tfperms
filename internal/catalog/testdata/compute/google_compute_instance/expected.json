@@ -27,5 +27,26 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_instance",
+      "name": "vm",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.disks.create",
+        "compute.disks.delete",
+        "compute.instances.create",
+        "compute.instances.delete",
+        "compute.instances.get",
+        "compute.instances.setMetadata",
+        "compute.instances.setTags",
+        "compute.instances.update",
+        "compute.subnetworks.use",
+        "iam.serviceAccounts.actAs"
+      ],
+      "applied": []
+    }
+  ]
 }

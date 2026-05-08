@@ -62,6 +62,7 @@
 package resolver
 
 import (
+	"maps"
 	"math/big"
 	"sort"
 	"strings"
@@ -122,6 +123,14 @@ import (
 //     so multiple unknowns or unresolveds in the same configuration
 //     produce stable golden output even when reused modules collapse
 //     all the leading tiers to ties.
+//   - Resources is the per-resource attribution layer: every resource
+//     whose type matched a catalog entry contributes one ResourceResult
+//     describing the catalog's base permissions and any conditionals
+//     that fired for it. Sort order is (File, Line, Type, Name,
+//     ModulePath) — the same disambiguator UnresolvedConditional uses
+//     for reused-module instantiations. Resolve emits Resources in
+//     source order; the reporter's Canonicalize pass enforces the
+//     deterministic sort independently of input order.
 type Result struct {
 	PlanPerms       []string                `json:"plan_perms"`
 	ApplyOnlyPerms  []string                `json:"apply_only_perms"`
@@ -129,6 +138,7 @@ type Result struct {
 	Diagnostics     []Diagnostic            `json:"diagnostics"`
 	Unknowns        []UnknownResource       `json:"unknowns"`
 	Unresolved      []UnresolvedConditional `json:"unresolved"`
+	Resources       []ResourceResult        `json:"resources"`
 }
 
 // Diagnostic describes a single parse-level warning encountered during
@@ -208,6 +218,64 @@ type UnresolvedConditional struct {
 	Line         int      `json:"line"`
 }
 
+// ResourceResult captures the catalog contribution of a single
+// Terraform resource. It is the per-resource attribution layer that
+// sits beneath the global PlanPerms / ApplyOnlyPerms / TotalApplyPerms
+// sets on Result: the global sets answer "what permissions does this
+// configuration need?", a ResourceResult answers "and which block
+// asked for them?". The reporter's by-resource format
+// (tfperms-ftq.2) consumes this directly so it does not have to
+// re-resolve.
+//
+// Identity is the (Type, Name, File, Line, ModulePath) tuple — the
+// same disambiguator UnresolvedConditional uses for reused-module
+// instantiations: two `module "x" { source = "./mod" }` and
+// `module "y" { source = "./mod" }` blocks produce two resources with
+// identical (Type, Name, File, Line) and only ModulePath
+// distinguishes them, so it has to be part of the ResourceResult key.
+// Root-level resources have a nil/empty ModulePath; the JSON tag is
+// `omitempty`, mirroring UnresolvedConditional.
+//
+// BasePerms is the sorted, deduplicated effective permission set the
+// catalog's base entry contributed for this resource — i.e. Plan ∪
+// Create ∪ Update ∪ Delete with prevent_destroy filtering applied,
+// matching the resolver's global-set semantics. A
+// `lifecycle { prevent_destroy = true }` resource will not include
+// its Delete permissions in BasePerms. Data-source entries contribute
+// only their Plan slice (the catalog's read-only contract); their
+// BasePerms therefore contains only the read permissions.
+//
+// Applied is the list of catalog conditionals whose `when:` predicate
+// matched this resource. Each AppliedConditional carries the catalog's
+// literal When map (deep-cloned so the catalog's storage cannot be
+// mutated through the result) plus the conditional's sorted,
+// deduplicated permission contribution with prevent_destroy filtering
+// applied — same effective-set semantics as BasePerms, so the
+// per-resource attribution view matches the global sets exactly.
+type ResourceResult struct {
+	Type       string               `json:"type"`
+	Name       string               `json:"name"`
+	File       string               `json:"file"`
+	Line       int                  `json:"line"`
+	ModulePath []string             `json:"module_path,omitempty"`
+	BasePerms  []string             `json:"base_perms"`
+	Applied    []AppliedConditional `json:"applied"`
+}
+
+// AppliedConditional describes a catalog conditional whose `when:`
+// predicate matched a resource. When is the literal predicate map
+// from the catalog, deep-cloned at construction so downstream mutation
+// of the result cannot reach back into the catalog's loaded storage.
+// Permissions is the sorted, deduplicated effective permission set
+// the conditional contributed for this resource, with prevent_destroy
+// filtering applied to match BasePerms's semantics — the union of
+// Plan ∪ Create ∪ Update ∪ Delete (minus Delete when prevent_destroy
+// is set on the resource).
+type AppliedConditional struct {
+	When        map[string]any `json:"when"`
+	Permissions []string       `json:"permissions"`
+}
+
 // Resolve combines the parsed resource set with the merged catalog and
 // returns a Result. See the package doc and Result's doc for the
 // permission-set semantics.
@@ -226,6 +294,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 	apply := make(map[string]struct{})
 	unknowns := make(map[unknownKey]struct{})
 	unresolved := make(map[unresolvedRecordKey]unresolvedRecordValue)
+	resourceResults := make([]ResourceResult, 0, len(resources))
 
 	for _, r := range resources {
 		// Skip kinds the parser does not emit. The parser's contract
@@ -242,10 +311,34 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 			continue
 		}
 		applyPermissionSet(plan, apply, entry.base, r.PreventDestroy)
+
+		// Per-resource attribution: capture the catalog contribution
+		// of this resource so the by-resource reporter format
+		// (tfperms-ftq.2) does not have to re-resolve. BasePerms and
+		// every Applied entry use effective-set semantics — the same
+		// Plan ∪ Create ∪ Update ∪ Delete union (minus Delete on
+		// prevent_destroy) the global sets are built from. Applied is
+		// allocated as an empty (non-nil) slice so a resource with no
+		// firing conditionals still marshals as `[]` in JSON, matching
+		// the field-invariants contract for top-level slices.
+		rr := ResourceResult{
+			Type:       r.Type,
+			Name:       r.Name,
+			File:       r.File,
+			Line:       r.Line,
+			ModulePath: cloneModulePath(r.ModulePath),
+			BasePerms:  effectivePermStrings(entry.base, r.PreventDestroy),
+			Applied:    []AppliedConditional{},
+		}
+
 		for _, cond := range entry.conditionals {
 			matched, missing := matchesConditional(r.Attrs, cond.when)
 			if matched {
 				applyPermissionSet(plan, apply, cond.permissions, r.PreventDestroy)
+				rr.Applied = append(rr.Applied, AppliedConditional{
+					When:        cloneWhen(cond.when),
+					Permissions: effectivePermStrings(cond.permissions, r.PreventDestroy),
+				})
 			}
 			for _, attr := range missing {
 				key := unresolvedRecordKey{
@@ -262,6 +355,8 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 				}
 			}
 		}
+
+		resourceResults = append(resourceResults, rr)
 	}
 
 	planPerms := sortedSet(plan)
@@ -275,6 +370,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 		Diagnostics:     []Diagnostic{},
 		Unknowns:        sortedUnknowns(unknowns),
 		Unresolved:      sortedUnresolved(unresolved),
+		Resources:       resourceResults,
 	}
 }
 
@@ -506,6 +602,48 @@ func cloneModulePath(path []string) []string {
 	}
 	out := make([]string, len(path))
 	copy(out, path)
+	return out
+}
+
+// effectivePermStrings returns the sorted, deduplicated union of
+// every stage in perms (Plan ∪ Create ∪ Update ∪ Delete), with the
+// Delete slice suppressed when preventDestroy is true. This mirrors
+// the staging rules in applyPermissionSet — the per-resource
+// attribution view (ResourceResult.BasePerms,
+// AppliedConditional.Permissions) thus matches the global PlanPerms /
+// ApplyOnlyPerms / TotalApplyPerms sets exactly. Always returns a
+// non-nil slice so JSON marshals as `[]` rather than `null`, matching
+// the Result field invariants.
+func effectivePermStrings(perms catalog.PermissionSet, preventDestroy bool) []string {
+	set := make(map[string]struct{})
+	addAll(set, perms.Plan)
+	addAll(set, perms.Create)
+	addAll(set, perms.Update)
+	if !preventDestroy {
+		addAll(set, perms.Delete)
+	}
+	return sortedSet(set)
+}
+
+// cloneWhen returns a defensive copy of a catalog Conditional.When
+// map so AppliedConditional consumers cannot mutate the catalog's
+// loaded storage through the result. Catalog When values are scalar
+// (bool / string / number per ctyValueEqualsLiteral's contract), so a
+// shallow value copy is sufficient — we are guarding against the map
+// header alias, not against deep aliasing.
+//
+// nil in, nil out — preserving the convention that an absent When map
+// (which the catalog validator does not currently produce, but which
+// callers may construct synthetically in tests) renders as a JSON
+// `null` rather than `{}`. AppliedConditional values from Resolve
+// always come from a catalog entry, where When is non-empty by
+// validator contract.
+func cloneWhen(when map[string]any) map[string]any {
+	if len(when) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(when))
+	maps.Copy(out, when)
 	return out
 }
 

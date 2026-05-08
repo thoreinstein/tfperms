@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_kms_crypto_key",
+      "name": "data_key",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "cloudkms.cryptoKeyVersions.destroy",
+        "cloudkms.cryptoKeys.create",
+        "cloudkms.cryptoKeys.get",
+        "cloudkms.cryptoKeys.update"
+      ],
+      "applied": []
+    }
+  ]
 }

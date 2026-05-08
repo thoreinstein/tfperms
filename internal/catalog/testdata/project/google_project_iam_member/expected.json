@@ -11,5 +11,18 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_project_iam_member",
+      "name": "alice_viewer",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "resourcemanager.projects.getIamPolicy",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "applied": []
+    }
+  ]
 }

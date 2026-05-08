@@ -8,5 +8,17 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_storage_notification",
+      "name": "object_changed",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "storage.objects.list"
+      ],
+      "applied": []
+    }
+  ]
 }

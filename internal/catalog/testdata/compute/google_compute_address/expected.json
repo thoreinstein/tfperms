@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_address",
+      "name": "vip",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.addresses.create",
+        "compute.addresses.delete",
+        "compute.addresses.get",
+        "compute.addresses.setLabels"
+      ],
+      "applied": []
+    }
+  ]
 }

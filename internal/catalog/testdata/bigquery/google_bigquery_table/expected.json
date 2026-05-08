@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_bigquery_table",
+      "name": "events",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "bigquery.tables.create",
+        "bigquery.tables.delete",
+        "bigquery.tables.get",
+        "bigquery.tables.update"
+      ],
+      "applied": []
+    }
+  ]
 }

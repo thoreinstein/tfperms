@@ -204,6 +204,9 @@ func relativizeResultPaths(res *resolver.Result, absDir string) {
 	for i := range res.Unresolved {
 		res.Unresolved[i].File = relativiseFile(res.Unresolved[i].File, absDir)
 	}
+	for i := range res.Resources {
+		res.Resources[i].File = relativiseFile(res.Resources[i].File, absDir)
+	}
 }
 
 // relativiseFile returns file as a forward-slashed path relative to

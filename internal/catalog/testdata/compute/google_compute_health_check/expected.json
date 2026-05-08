@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_health_check",
+      "name": "tcp",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.healthChecks.create",
+        "compute.healthChecks.delete",
+        "compute.healthChecks.get",
+        "compute.healthChecks.update"
+      ],
+      "applied": []
+    }
+  ]
 }

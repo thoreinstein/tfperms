@@ -17,5 +17,21 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_cloud_run_service",
+      "name": "api",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "iam.serviceAccounts.actAs",
+        "run.services.create",
+        "run.services.delete",
+        "run.services.get",
+        "run.services.update"
+      ],
+      "applied": []
+    }
+  ]
 }

@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_sql_database",
+      "name": "app",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "cloudsql.databases.create",
+        "cloudsql.databases.delete",
+        "cloudsql.databases.get",
+        "cloudsql.databases.update"
+      ],
+      "applied": []
+    }
+  ]
 }

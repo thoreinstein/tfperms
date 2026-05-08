@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_target_pool",
+      "name": "default",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.targetPools.create",
+        "compute.targetPools.delete",
+        "compute.targetPools.get",
+        "compute.targetPools.update"
+      ],
+      "applied": []
+    }
+  ]
 }

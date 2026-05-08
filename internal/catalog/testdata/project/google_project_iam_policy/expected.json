@@ -18,5 +18,18 @@
       "line": 4
     }
   ],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_project_iam_policy",
+      "name": "project",
+      "file": "main.tf",
+      "line": 11,
+      "base_perms": [
+        "resourcemanager.projects.getIamPolicy",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "applied": []
+    }
+  ]
 }

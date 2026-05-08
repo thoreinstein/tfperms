@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_backend_service",
+      "name": "default",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.backendServices.create",
+        "compute.backendServices.delete",
+        "compute.backendServices.get",
+        "compute.backendServices.update"
+      ],
+      "applied": []
+    }
+  ]
 }

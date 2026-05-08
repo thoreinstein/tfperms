@@ -13,5 +13,19 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_pubsub_schema",
+      "name": "events",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "pubsub.schemas.create",
+        "pubsub.schemas.delete",
+        "pubsub.schemas.get"
+      ],
+      "applied": []
+    }
+  ]
 }

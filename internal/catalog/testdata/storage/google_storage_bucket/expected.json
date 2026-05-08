@@ -19,5 +19,40 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_storage_bucket",
+      "name": "primary",
+      "file": "main.tf",
+      "line": 10,
+      "base_perms": [
+        "storage.buckets.create",
+        "storage.buckets.delete",
+        "storage.buckets.get",
+        "storage.buckets.update"
+      ],
+      "applied": [
+        {
+          "when": {
+            "uniform_bucket_level_access": true
+          },
+          "permissions": [
+            "storage.buckets.getIamPolicy",
+            "storage.buckets.setIamPolicy"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "google_storage_bucket",
+      "name": "lookup",
+      "file": "main.tf",
+      "line": 16,
+      "base_perms": [
+        "storage.buckets.get"
+      ],
+      "applied": []
+    }
+  ]
 }

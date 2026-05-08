@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_subnetwork",
+      "name": "primary",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.subnetworks.create",
+        "compute.subnetworks.delete",
+        "compute.subnetworks.get",
+        "compute.subnetworks.update"
+      ],
+      "applied": []
+    }
+  ]
 }

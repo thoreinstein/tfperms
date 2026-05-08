@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_url_map",
+      "name": "default",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.urlMaps.create",
+        "compute.urlMaps.delete",
+        "compute.urlMaps.get",
+        "compute.urlMaps.update"
+      ],
+      "applied": []
+    }
+  ]
 }
