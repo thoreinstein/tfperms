@@ -927,3 +927,63 @@ resource "google_made_up_thing" "x" {
 		t.Errorf("absolute path %q leaked into output:\n%s", parent, got)
 	}
 }
+
+// TestRootCommandJSONRelativisesFile pins the path-relativisation
+// contract for the JSON format. relativizeResult runs unconditionally
+// in runAnalyze before any formatter dispatches, so the JSON
+// resources[].file field must be the input-relative `main.tf`, never
+// an absolute t.TempDir path. This was the test-coverage gap called
+// out by review: the flat and by-resource formats had relativisation
+// pinned but JSON did not.
+func TestRootCommandJSONRelativisesFile(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "fixture")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`
+resource "google_storage_bucket" "primary" {
+  name                        = "json-rel-bucket"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	t.Chdir(parent)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"fixture", "--format=json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	raw := out.Bytes()
+
+	// Absolute path leakage would surface as the t.TempDir parent
+	// prefix appearing anywhere in the JSON document, including
+	// resources[].file.
+	if bytes.Contains(raw, []byte(parent)) {
+		t.Fatalf("absolute path %q leaked into JSON output:\n%s", parent, out.String())
+	}
+
+	var got struct {
+		Resources []struct {
+			Type string `json:"type"`
+			File string `json:"file"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal json: %v\noutput: %s", err, out.String())
+	}
+	if len(got.Resources) != 1 {
+		t.Fatalf("resources length = %d, want 1; output:\n%s", len(got.Resources), out.String())
+	}
+	if got.Resources[0].File != "main.tf" {
+		t.Errorf("resources[0].file = %q, want %q", got.Resources[0].File, "main.tf")
+	}
+}
