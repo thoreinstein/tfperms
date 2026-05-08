@@ -28,7 +28,13 @@ The full JSON Schema is available at [`docs/schema/tfperms-output-v1.json`](sche
 ### Top-Level Fields
 
 *   `version`: The API schema version (currently "1.0").
-*   `summary`: A high-level count of permissions, resources, and diagnostics.
+*   `summary`: An object with four integer counters describing the analysis result. The fields are:
+    *   `permission_count`: total number of distinct permissions a service account running `terraform apply` needs (the length of `total_apply_permissions`).
+    *   `resource_count`: number of distinct Terraform resource blocks observed by the parser (every module-instance copy is counted as its own resource, and data sources are included).
+    *   `unknown_count`: number of entries in the `unknowns` array (resources missing from the catalog).
+    *   `unresolved_count`: number of entries in the `unresolved_conditionals` array (catalog conditionals that could not be evaluated).
+
+    There is no aggregate `diagnostics` count in `summary`; the `diagnostics` array at the top level is the source of truth for parse-level warnings.
 *   `plan_permissions`: Permissions required for `terraform plan` (state refresh).
 *   `apply_only_permissions`: Permissions required for `terraform apply` that are NOT in `plan_permissions`.
 *   `total_apply_permissions`: The union of all permissions required for a full `terraform apply` cycle.

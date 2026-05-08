@@ -97,10 +97,22 @@ func RenderJSON(w io.Writer, res resolver.Result, resourceCount int, version str
 		}
 	}
 
-	encoder := json.NewEncoder(w)
+	ew := &errWriter{w: w}
+	encoder := json.NewEncoder(ew)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(output); err != nil {
+		// Flush any pending writer error first: a broken pipe latched
+		// during the encode would otherwise be masked by the encoder
+		// surfacing its own write error from the same source. Either
+		// way, returning a wrapped error preserves the underlying
+		// cause for errors.Is comparisons. Mirrors role.go.
+		if ew.err != nil {
+			return fmt.Errorf("write json: %w", ew.err)
+		}
 		return fmt.Errorf("encode json: %w", err)
+	}
+	if ew.err != nil {
+		return fmt.Errorf("write json: %w", ew.err)
 	}
 	return nil
 }
