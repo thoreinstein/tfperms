@@ -1015,3 +1015,222 @@ resource "google_storage_bucket" "primary" {
 		t.Errorf("resources[0].file = %q, want %q", got.Resources[0].File, "main.tf")
 	}
 }
+
+// quietFixture is the input the --quiet integration tests run against.
+// The fixture deliberately combines a catalogued resource with an
+// uncatalogued one and an unresolved-variable conditional so a single
+// run exercises both diagnostic sections (`unknown resources` and
+// `unresolved conditionals`). uniform_bucket_level_access references a
+// variable with no default, which the resolver surfaces as an
+// unresolved conditional rather than a definitive yes/no — exactly the
+// noise --quiet is designed to hide. Centralised so the four flag tests
+// below (-q, --quiet, --by-resource quiet, json/role no-op) all share
+// the same invariants.
+const quietFixture = `
+variable "ubla" {
+  type = bool
+}
+
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-quiet-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = var.ubla
+}
+
+resource "google_made_up_thing" "x" {
+  name = "nope"
+}
+`
+
+// TestRootCommandQuietFlagSuppressesDiagnosticsFlat exercises the
+// long form --quiet flag against the default flat format. The summary
+// line must still report the unknowns/unresolved counts (integration
+// tooling that grep's the first line should still see that diagnostic
+// findings exist) but the section headers and detail rows must be
+// fully absent from the output.
+func TestRootCommandQuietFlagSuppressesDiagnosticsFlat(t *testing.T) {
+	dir := writeFixture(t, quietFixture)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir, "--quiet"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	// Summary line must retain accurate diagnostic counts even though
+	// the detail sections are suppressed.
+	if !strings.Contains(got, "1 unknown") {
+		t.Errorf("summary should still report unknowns count under --quiet; got:\n%s", got)
+	}
+	if !strings.Contains(got, "1 unresolved conditional") {
+		t.Errorf("summary should still report unresolved count under --quiet; got:\n%s", got)
+	}
+	// Section headers must be entirely absent — anchor on the header
+	// form so the summary line's bare phrase does not false-positive.
+	if strings.Contains(got, "unknown resources (") {
+		t.Errorf("--quiet output should not contain 'unknown resources' header.\noutput:\n%s", got)
+	}
+	if strings.Contains(got, "unresolved conditionals (") {
+		t.Errorf("--quiet output should not contain 'unresolved conditionals' header.\noutput:\n%s", got)
+	}
+	// Detail rows that would have appeared under the suppressed
+	// sections must not leak.
+	if strings.Contains(got, "google_made_up_thing.x") {
+		t.Errorf("--quiet output should not contain unknown-resource detail row.\noutput:\n%s", got)
+	}
+}
+
+// TestRootCommandQuietShorthandFlagSuppressesDiagnosticsFlat exercises
+// the short form -q. Driving cobra with the alias rather than the long
+// form proves the BoolVarP shorthand wiring is in place — without it,
+// `tfperms -q` would surface as an unknown-flag error.
+func TestRootCommandQuietShorthandFlagSuppressesDiagnosticsFlat(t *testing.T) {
+	dir := writeFixture(t, quietFixture)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir, "-q"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	if strings.Contains(got, "unknown resources (") {
+		t.Errorf("-q output should not contain 'unknown resources' header.\noutput:\n%s", got)
+	}
+	if strings.Contains(got, "unresolved conditionals (") {
+		t.Errorf("-q output should not contain 'unresolved conditionals' header.\noutput:\n%s", got)
+	}
+}
+
+// TestRootCommandQuietFlagSuppressesDiagnosticsByResource pins the
+// --quiet contract under the by-resource format. Group bodies and the
+// per-resource permission breakdown must remain visible — only the
+// catalog-gap diagnostic sections are trimmed.
+func TestRootCommandQuietFlagSuppressesDiagnosticsByResource(t *testing.T) {
+	dir := writeFixture(t, quietFixture)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir, "--by-resource", "--quiet"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	if strings.Contains(got, "unknown resources (") {
+		t.Errorf("--quiet --by-resource output should not contain 'unknown resources' header.\noutput:\n%s", got)
+	}
+	if strings.Contains(got, "unresolved conditionals (") {
+		t.Errorf("--quiet --by-resource output should not contain 'unresolved conditionals' header.\noutput:\n%s", got)
+	}
+	// Group breakdown must still appear — quiet only trims diagnostic
+	// sections, not the per-resource view that --by-resource exists for.
+	if !strings.Contains(got, "  google_storage_bucket (1 instance):") {
+		t.Errorf("--quiet --by-resource output should still render group header.\noutput:\n%s", got)
+	}
+}
+
+// TestRootCommandQuietFlagNoOpForJSON pins that --quiet has no effect
+// on the JSON output. The v1.0 JSON schema is a stability surface and
+// silently dropping the `unknowns` / `unresolved` arrays under --quiet
+// would break integration consumers that always expect those keys to
+// be present. Two runs with and without --quiet must produce
+// byte-identical JSON output.
+func TestRootCommandQuietFlagNoOpForJSON(t *testing.T) {
+	dir := writeFixture(t, quietFixture)
+
+	run := func(args []string) []byte {
+		root := newRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetErr(out)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("Execute %v: %v\noutput: %s", args, err, out.String())
+		}
+		return out.Bytes()
+	}
+
+	verbose := run([]string{dir, "--format=json"})
+	quiet := run([]string{dir, "--format=json", "--quiet"})
+
+	if !bytes.Equal(verbose, quiet) {
+		t.Errorf("--quiet should be a no-op for JSON output\n--- verbose ---\n%s\n--- quiet ---\n%s",
+			verbose, quiet)
+	}
+}
+
+// TestRootCommandQuietFlagNoOpForRole pins that --quiet has no effect
+// on the --format=role output. The custom-role YAML does not have
+// unknowns / unresolved sections to suppress, so the flag is a noop.
+// Two runs with and without --quiet must produce byte-identical
+// output, proving the flag does not accidentally trim part of the
+// permission listing.
+func TestRootCommandQuietFlagNoOpForRole(t *testing.T) {
+	dir := writeFixture(t, quietFixture)
+
+	run := func(args []string) string {
+		root := newRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetErr(out)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("Execute %v: %v\noutput: %s", args, err, out.String())
+		}
+		return out.String()
+	}
+
+	verbose := run([]string{dir, "--format=role", "--role-name=tfperms_test_role"})
+	quiet := run([]string{dir, "--format=role", "--role-name=tfperms_test_role", "--quiet"})
+
+	if verbose != quiet {
+		t.Errorf("--quiet should be a no-op for role output\n--- verbose ---\n%s\n--- quiet ---\n%s",
+			verbose, quiet)
+	}
+}
+
+// TestRootCommandQuietFlagHelpText pins that --help mentions both the
+// long and short form and the "flat and by-resource" scope so a user
+// reading the help text knows the flag does not affect role / json
+// output. Without this, a user investigating a JSON-piped CI report
+// would expect --quiet to suppress sections in the JSON too — exactly
+// the silent-difference trap the help text needs to defuse.
+func TestRootCommandQuietFlagHelpText(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--help"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute --help: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	// Both the short and long flag forms must appear so cobra renders
+	// `-q, --quiet`. The exact spacing varies with cobra's column
+	// layout, so anchor on the substrings.
+	if !strings.Contains(got, "--quiet") {
+		t.Errorf("--help should mention --quiet flag.\noutput:\n%s", got)
+	}
+	if !strings.Contains(got, "-q") {
+		t.Errorf("--help should mention -q shorthand.\noutput:\n%s", got)
+	}
+}
