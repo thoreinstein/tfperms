@@ -44,6 +44,17 @@ import (
 // not resource bodies — so callers pass it explicitly. For pipelines
 // rooted at parser.LoadRecursive, len(resources) is the right value.
 //
+// quiet suppresses the `unknown resources` and `unresolved conditionals`
+// sections entirely (no header, no body, no leading blank line) so a
+// user investigating only the resolved permissions can scroll past the
+// noise. The summary line still carries the accurate unknowns and
+// unresolved counts so downstream tooling that grep's the first line
+// can detect that the run had diagnostic findings even when the user
+// asked for a compact output. Warnings, plan, and apply-only sections
+// are unaffected — quiet trims diagnostic context that was added for
+// catalog-gap discovery (Journey 3), not parser warnings or the core
+// permission set.
+//
 // Output layout (sample with all sections populated):
 //
 //	42 permissions for 17 resources, 2 unknowns, 3 unresolved conditionals
@@ -77,8 +88,8 @@ import (
 //
 //   - plan permissions: omitted when PlanPerms is empty.
 //   - apply-only permissions: omitted when ApplyOnlyPerms is empty.
-//   - unknown resources: omitted when Unknowns is empty.
-//   - unresolved conditionals: omitted when Unresolved is empty.
+//   - unknown resources: omitted when Unknowns is empty OR quiet is true.
+//   - unresolved conditionals: omitted when Unresolved is empty OR quiet is true.
 //
 // "Omitted" means no header, no body, no leading blank line — a
 // fully-collapsed Result with zero permissions and zero diagnostics
@@ -97,14 +108,17 @@ import (
 //     cannot silently desynchronise the summary number from the
 //     printed sets.
 //   - resourceCount is taken from the caller verbatim.
-//   - The unknowns and unresolved counts are taken from the slices.
+//   - The unknowns and unresolved counts are taken from the slices —
+//     they remain accurate under quiet because integration tooling
+//     reading the summary line should still see that diagnostics
+//     existed, even when their detail rows are suppressed.
 //
 // All writes flow through an errWriter that latches the first underlying
 // io.Writer error; the same pattern that renderCatalogStats uses in
 // cmd/tfperms/catalog.go. The trailing ew.err check turns a broken
 // stdout pipe into a non-nil return rather than silent truncation under
 // exit code 0 — important for CI consumers that diff the output.
-func Render(w io.Writer, res resolver.Result, resourceCount int) error {
+func Render(w io.Writer, res resolver.Result, resourceCount int, quiet bool) error {
 	res = Canonicalize(res)
 	ew := &errWriter{w: w}
 
@@ -144,7 +158,7 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		}
 	}
 
-	if len(res.Unknowns) > 0 {
+	if !quiet && len(res.Unknowns) > 0 {
 		fmt.Fprintln(ew)
 		fmt.Fprintf(ew, "  unknown resources (%d):\n", len(res.Unknowns))
 		for _, u := range res.Unknowns {
@@ -152,7 +166,7 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		}
 	}
 
-	if len(res.Unresolved) > 0 {
+	if !quiet && len(res.Unresolved) > 0 {
 		fmt.Fprintln(ew)
 		fmt.Fprintf(ew, "  unresolved conditionals (%d):\n", len(res.Unresolved))
 		for _, u := range res.Unresolved {

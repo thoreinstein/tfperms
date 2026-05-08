@@ -63,7 +63,7 @@ func TestRenderFull(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(&buf, res, 17); err != nil {
+	if err := Render(&buf, res, 17, false); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestRenderCollapsed(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(&buf, res, 1); err != nil {
+	if err := Render(&buf, res, 1, false); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
@@ -185,7 +185,7 @@ func TestRenderMinimal(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(&buf, res, 0); err != nil {
+	if err := Render(&buf, res, 0, false); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestRenderUnresolvedWithModulePath(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(&buf, res, 0); err != nil {
+	if err := Render(&buf, res, 0, false); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
@@ -272,7 +272,7 @@ func TestRenderSummarySingular(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(&buf, res, 1); err != nil {
+	if err := Render(&buf, res, 1, false); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
@@ -294,7 +294,7 @@ func TestRenderDiagnostics(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(&buf, res, 1); err != nil {
+	if err := Render(&buf, res, 1, false); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
@@ -358,7 +358,7 @@ func TestRenderPropagatesWriteErrors(t *testing.T) {
 	}
 
 	w := &failingWriter{byteBudget: 8}
-	err := Render(w, res, 1)
+	err := Render(w, res, 1, false)
 	if err == nil {
 		t.Fatal("Render with a failing writer returned nil; expected the broken-pipe error to be propagated")
 	}
@@ -393,7 +393,7 @@ func TestRenderPropagatesShortWrites(t *testing.T) {
 		TotalApplyPerms: []string{"a.b.c"},
 	}
 
-	err := Render(shortWriter{}, res, 1)
+	err := Render(shortWriter{}, res, 1, false)
 	if err == nil {
 		t.Fatal("Render with a short writer returned nil; expected io.ErrShortWrite to be latched and surfaced")
 	}
@@ -670,6 +670,111 @@ func TestCanonicalizeUnknownsModulePathNotShared(t *testing.T) {
 	}
 }
 
+// TestRenderQuietSuppressesDiagnosticSections pins the quiet contract
+// for the flat formatter: when quiet is true, the `unknown resources`
+// and `unresolved conditionals` sections are suppressed entirely (no
+// header, no body, no leading blank line). The summary line still
+// reports the accurate counts so downstream tooling that parses the
+// first line continues to see that diagnostic findings exist — the
+// flag trims display, not the data the integration consumer relies on.
+//
+// Plan, apply-only, and warnings sections are explicitly verified to
+// remain present, because the flag only targets catalog-gap diagnostics
+// (Journey 3) — not parser warnings or the core permission set.
+func TestRenderQuietSuppressesDiagnosticSections(t *testing.T) {
+	res := resolver.Result{
+		PlanPerms:       []string{"storage.buckets.get"},
+		ApplyOnlyPerms:  []string{"storage.buckets.create"},
+		TotalApplyPerms: []string{"storage.buckets.create", "storage.buckets.get"},
+		Diagnostics: []resolver.Diagnostic{
+			{Summary: "non-local module source", File: "main.tf", Line: 4},
+		},
+		Unknowns: []resolver.UnknownResource{
+			{Type: "google_dataplex_lake", Name: "primary", File: "main.tf", Line: 42},
+		},
+		Unresolved: []resolver.UnresolvedConditional{
+			{
+				ResourceType: "google_storage_bucket",
+				ResourceName: "data",
+				Attribute:    "uniform_bucket_level_access",
+				Reason:       "missing_variable",
+				File:         "main.tf",
+				Line:         14,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(&buf, res, 17, true); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := buf.String()
+
+	// Summary line must still carry the unknowns / unresolved counts —
+	// quiet trims display, not the integration-tooling signal.
+	if !strings.HasPrefix(got, "  2 permissions for 17 resources, 1 unknown, 1 unresolved conditional\n") {
+		t.Errorf("summary line should retain accurate counts under quiet; got:\n%s", got)
+	}
+
+	// The unknown resources / unresolved conditionals headers must be
+	// fully suppressed. Anchor on the section-header form ("unknown
+	// resources (") because the summary line legitimately contains the
+	// bare phrase with a count prefix.
+	if strings.Contains(got, "unknown resources (") {
+		t.Errorf("quiet output should not contain 'unknown resources' header.\noutput:\n%s", got)
+	}
+	if strings.Contains(got, "unresolved conditionals (") {
+		t.Errorf("quiet output should not contain 'unresolved conditionals' header.\noutput:\n%s", got)
+	}
+
+	// Detail rows that would have appeared under the suppressed
+	// sections must not leak into the output.
+	if strings.Contains(got, "google_dataplex_lake.primary") {
+		t.Errorf("quiet output should not contain unknown-resource detail row.\noutput:\n%s", got)
+	}
+	if strings.Contains(got, "uniform_bucket_level_access") {
+		t.Errorf("quiet output should not contain unresolved-conditional detail row.\noutput:\n%s", got)
+	}
+
+	// Permission and warning sections must still render — quiet only
+	// targets the catalog-gap diagnostic sections.
+	if !strings.Contains(got, "  plan permissions (1):") {
+		t.Errorf("quiet output should still render plan permissions.\noutput:\n%s", got)
+	}
+	if !strings.Contains(got, "  apply-only permissions (1):") {
+		t.Errorf("quiet output should still render apply-only permissions.\noutput:\n%s", got)
+	}
+	if !strings.Contains(got, "  warnings (1):") {
+		t.Errorf("quiet output should still render warnings.\noutput:\n%s", got)
+	}
+}
+
+// TestRenderQuietWithEmptyDiagnosticsIsNoOp pins that quiet has no
+// effect on a Result with no unknowns or unresolved conditionals — the
+// suppression is a noop and the rendered bytes match what the verbose
+// (non-quiet) formatter produces. This guarantees that tooling parsing
+// the output of `--quiet` against a clean configuration sees the same
+// shape as the non-quiet path.
+func TestRenderQuietWithEmptyDiagnosticsIsNoOp(t *testing.T) {
+	res := resolver.Result{
+		PlanPerms:       []string{"storage.buckets.get"},
+		ApplyOnlyPerms:  []string{"storage.buckets.create"},
+		TotalApplyPerms: []string{"storage.buckets.create", "storage.buckets.get"},
+	}
+
+	var verbose, quiet bytes.Buffer
+	if err := Render(&verbose, res, 1, false); err != nil {
+		t.Fatalf("Render verbose: %v", err)
+	}
+	if err := Render(&quiet, res, 1, true); err != nil {
+		t.Fatalf("Render quiet: %v", err)
+	}
+	if verbose.String() != quiet.String() {
+		t.Errorf("quiet should be a noop on a clean Result\n--- verbose ---\n%s\n--- quiet ---\n%s",
+			verbose.String(), quiet.String())
+	}
+}
+
 // TestRenderTwoRunsAreByteIdentical pins tfperms-ftq.5's acceptance
 // criteria directly: two runs of Render against the same fixture
 // produce byte-identical output. The fixture is shuffled (slices in
@@ -679,10 +784,10 @@ func TestRenderTwoRunsAreByteIdentical(t *testing.T) {
 	res := shuffledFixture()
 
 	var buf1, buf2 bytes.Buffer
-	if err := Render(&buf1, res, 5); err != nil {
+	if err := Render(&buf1, res, 5, false); err != nil {
 		t.Fatalf("Render run 1: %v", err)
 	}
-	if err := Render(&buf2, res, 5); err != nil {
+	if err := Render(&buf2, res, 5, false); err != nil {
 		t.Fatalf("Render run 2: %v", err)
 	}
 
