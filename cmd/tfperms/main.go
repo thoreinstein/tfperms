@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/spf13/cobra"
@@ -43,6 +44,7 @@ const rootDefaultDir = "."
 const (
 	formatFlat = "flat"
 	formatRole = "role"
+	formatJSON = "json"
 )
 
 // roleNameRE is the regex a --role-name value must match before the
@@ -123,7 +125,7 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
-	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list) or role (GCP custom-role YAML)")
+	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list), role (GCP custom-role YAML), or json")
 	cmd.Flags().StringVar(&roleName, "role-name", "", "GCP custom-role ID; whenever provided must match ^[a-zA-Z0-9_]{3,64}$, and is required with --format=role")
 	cmd.AddCommand(newCatalogCmd())
 	return cmd
@@ -135,10 +137,10 @@ func newRootCmd() *cobra.Command {
 //
 // Rules:
 //
-//   - --format must be either formatFlat or formatRole. Any other value
-//     is a user typo (e.g. --format=yaml) and rejected with an explicit
-//     listing of the legal values rather than letting the dispatch
-//     branch silently fall through to the default formatter.
+//   - --format must be either formatFlat, formatRole, or formatJSON. Any
+//     other value is a user typo (e.g. --format=yaml) and rejected with
+//     an explicit listing of the legal values rather than letting the
+//     dispatch branch silently fall through to the default formatter.
 //   - --format=role requires a non-empty --role-name. The role name is
 //     used as both the YAML title and the gcloud command's role-ID
 //     positional argument; a missing name would generate a file gcloud
@@ -155,10 +157,10 @@ func newRootCmd() *cobra.Command {
 // --role-name that does not match the GCP custom-role-ID regex.
 func validateFormatFlags(format, roleName string) error {
 	switch format {
-	case formatFlat, formatRole:
+	case formatFlat, formatRole, formatJSON:
 		// fine
 	default:
-		return fmt.Errorf("invalid --format %q: must be one of %q or %q", format, formatFlat, formatRole)
+		return fmt.Errorf("invalid --format %q: must be one of %q, %q, or %q", format, formatFlat, formatRole, formatJSON)
 	}
 	if format == formatRole && roleName == "" {
 		return fmt.Errorf("--format=%s requires --role-name", formatRole)
@@ -179,6 +181,7 @@ func validateFormatFlags(format, roleName string) error {
 //   - formatFlat → reporter.Render (the default human-readable list).
 //   - formatRole → reporter.RenderRole (GCP custom-role YAML, using
 //     roleName as the title and gcloud role-ID).
+//   - formatJSON → reporter.RenderJSON (stable, versioned JSON output).
 //
 // Validation of the format / roleName combination is the caller's
 // responsibility — newRootCmd's PreRunE handles it before runAnalyze
@@ -204,10 +207,14 @@ func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	}
 	result := resolver.Resolve(resources, cat)
 	result.Diagnostics = relativizeDiags(diags, dir)
-	if format == formatRole {
+	switch format {
+	case formatRole:
 		return reporter.RenderRole(w, result, roleName, version, date)
+	case formatJSON:
+		return reporter.RenderJSON(w, result, len(resources), version, time.Now())
+	default:
+		return reporter.Render(w, result, len(resources))
 	}
-	return reporter.Render(w, result, len(resources))
 }
 
 // relativizeDiags converts hcl.Diagnostics to a slice of
