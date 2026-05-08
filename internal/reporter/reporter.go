@@ -16,17 +16,20 @@
 //     relativisation it wants the user to see; keeping the reporter
 //     path-agnostic prevents two layers from disagreeing about what the
 //     "root" is.
-//   - It relies on the resolver's deterministic sort contract for output
-//     stability. PlanPerms / ApplyOnlyPerms / TotalApplyPerms / Unknowns
-//     / Unresolved are documented to be sorted on the way out of
-//     Resolve, so the reporter does not re-sort. A future Canonicalize
-//     pass (beads tfperms-ftq.5) would belong here as a defence in
-//     depth, but is not required for byte-stable output today.
+//   - It enforces a deterministic sort independently of the resolver
+//     via the Canonicalize pass: every formatter calls Canonicalize on
+//     entry, so format-specific sort drift is impossible. This is a
+//     defence-in-depth on top of the resolver's own sort contract —
+//     two runs against the same input produce byte-identical output for
+//     every format, even if a future Resolve change emits Result fields
+//     in a different order.
 package reporter
 
 import (
 	"fmt"
 	"io"
+	"maps"
+	"sort"
 	"strings"
 
 	"github.com/thoreinstein/tfperms/internal/resolver"
@@ -102,6 +105,7 @@ import (
 // stdout pipe into a non-nil return rather than silent truncation under
 // exit code 0 — important for CI consumers that diff the output.
 func Render(w io.Writer, res resolver.Result, resourceCount int) error {
+	res = Canonicalize(res)
 	ew := &errWriter{w: w}
 
 	fmt.Fprintf(ew,
@@ -189,6 +193,287 @@ func modulePrefix(path []string) string {
 		b.WriteByte('.')
 	}
 	return b.String()
+}
+
+// Canonicalize returns a new Result with every collection sorted into
+// the deterministic order documented per field, leaving the input
+// untouched. It is the single source of truth for output sort order
+// across every format the reporter produces (flat list, by-resource,
+// custom-role YAML, JSON) — formatters call Canonicalize on entry and
+// then walk the slices in their natural order, so format-specific
+// sort drift is impossible.
+//
+// Sort orders (matching the resolver's existing contract so calling
+// Canonicalize on a Result returned by Resolve is the identity, modulo
+// the freshly-allocated copies):
+//
+//   - PlanPerms / ApplyOnlyPerms / TotalApplyPerms: alphabetical.
+//   - Diagnostics: (File, Line, Summary).
+//   - Unknowns: (File, Line, Type, Name).
+//   - Unresolved: (File, Line, ResourceType, Attribute, ResourceName,
+//     ModulePath). The ModulePath comparator uses the same prefix-aware
+//     ordering the resolver pins ([] < [a] < [a, b] < [b]).
+//   - Resources: (File, Line, Type, Name, ModulePath). Within each
+//     ResourceResult, BasePerms is sorted alphabetically and Applied is
+//     sorted by a deterministic key derived from the When map's
+//     sorted-key serialisation, with each AppliedConditional's
+//     Permissions also alphabetised.
+//
+// Idempotency: Canonicalize(Canonicalize(r)) is byte-identical to
+// Canonicalize(r). Every nested slice is also a fresh allocation, so a
+// downstream caller can mutate the returned Result without touching
+// either the input or any prior canonicalisation.
+//
+// Empty-slice contract: top-level slices (PlanPerms, ApplyOnlyPerms,
+// etc.) are always non-nil so JSON marshals them as `[]` rather than
+// `null`. A nil input slice canonicalises to a non-nil empty slice;
+// this matches resolver.Resolve's field invariants. ModulePath is the
+// one exception: it stays nil/empty so the `omitempty` JSON tag on
+// UnresolvedConditional and ResourceResult continues to drop the
+// field for root-level resources.
+func Canonicalize(res resolver.Result) resolver.Result {
+	return resolver.Result{
+		PlanPerms:       sortedStrings(res.PlanPerms),
+		ApplyOnlyPerms:  sortedStrings(res.ApplyOnlyPerms),
+		TotalApplyPerms: sortedStrings(res.TotalApplyPerms),
+		Diagnostics:     sortedDiagnostics(res.Diagnostics),
+		Unknowns:        sortedUnknowns(res.Unknowns),
+		Unresolved:      sortedUnresolved(res.Unresolved),
+		Resources:       sortedResources(res.Resources),
+	}
+}
+
+// sortedStrings returns a freshly-allocated alphabetically-sorted
+// copy of in. A nil input yields a non-nil empty slice so the
+// Canonicalize empty-slice contract holds for every top-level
+// permission slice.
+func sortedStrings(in []string) []string {
+	out := make([]string, len(in))
+	copy(out, in)
+	sort.Strings(out)
+	return out
+}
+
+// sortedDiagnostics returns a freshly-allocated copy of in sorted by
+// (File, Line, Summary). The Diagnostic struct value is copied; it has
+// no slice fields, so a shallow copy is sufficient.
+func sortedDiagnostics(in []resolver.Diagnostic) []resolver.Diagnostic {
+	out := make([]resolver.Diagnostic, len(in))
+	copy(out, in)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		return out[i].Summary < out[j].Summary
+	})
+	return out
+}
+
+// sortedUnknowns returns a freshly-allocated copy of in sorted by
+// (File, Line, Type, Name) — matching the resolver's own
+// sortedUnknowns order so calling Canonicalize on a Result from
+// Resolve is the identity.
+func sortedUnknowns(in []resolver.UnknownResource) []resolver.UnknownResource {
+	out := make([]resolver.UnknownResource, len(in))
+	copy(out, in)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// sortedUnresolved returns a freshly-allocated copy of in sorted by
+// (File, Line, ResourceType, Attribute, ResourceName, ModulePath).
+// The order matches the resolver's own sortedUnresolved (see
+// resolver.go) so calling Canonicalize on a Result from Resolve is
+// the identity. ModulePath is compared via moduleLess, the same
+// prefix-aware comparator the resolver uses
+// ([] < [a] < [a, b] < [b]).
+func sortedUnresolved(in []resolver.UnresolvedConditional) []resolver.UnresolvedConditional {
+	out := make([]resolver.UnresolvedConditional, len(in))
+	copy(out, in)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		if out[i].ResourceType != out[j].ResourceType {
+			return out[i].ResourceType < out[j].ResourceType
+		}
+		if out[i].Attribute != out[j].Attribute {
+			return out[i].Attribute < out[j].Attribute
+		}
+		if out[i].ResourceName != out[j].ResourceName {
+			return out[i].ResourceName < out[j].ResourceName
+		}
+		return moduleLess(out[i].ModulePath, out[j].ModulePath)
+	})
+	return out
+}
+
+// sortedResources returns a freshly-allocated copy of in sorted by
+// (File, Line, Type, Name, ModulePath). Each ResourceResult inside
+// the slice is itself canonicalised: BasePerms is sorted
+// alphabetically and Applied is sorted by a deterministic key derived
+// from the When map's sorted-key serialisation, with each
+// AppliedConditional's Permissions also alphabetised. Slice fields
+// are reallocated so the returned tree shares no backing arrays with
+// the input — the by-resource reporter format can mutate the result
+// freely.
+func sortedResources(in []resolver.ResourceResult) []resolver.ResourceResult {
+	out := make([]resolver.ResourceResult, len(in))
+	for i, r := range in {
+		out[i] = resolver.ResourceResult{
+			Type:       r.Type,
+			Name:       r.Name,
+			File:       r.File,
+			Line:       r.Line,
+			ModulePath: cloneStrings(r.ModulePath),
+			BasePerms:  sortedStrings(r.BasePerms),
+			Applied:    sortedApplied(r.Applied),
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return moduleLess(out[i].ModulePath, out[j].ModulePath)
+	})
+	return out
+}
+
+// sortedApplied returns a freshly-allocated copy of in sorted by the
+// deterministic key produced by appliedSortKey — the When map's
+// sorted-key serialisation. Within each AppliedConditional, the When
+// map is shallow-copied and Permissions is alphabetised, so callers
+// cannot mutate the catalog's storage through the result.
+//
+// The serialised When key is the only stable order we can produce on
+// a slice of conditionals: the catalog does not expose an intrinsic
+// identity for a Conditional (no name, no source location threaded
+// through), so two conditionals with different When maps are
+// distinguishable only by their predicates. A serialisation-based
+// key gives us a deterministic ordering that survives the random
+// iteration order Go's map runtime imposes on the input.
+func sortedApplied(in []resolver.AppliedConditional) []resolver.AppliedConditional {
+	out := make([]resolver.AppliedConditional, len(in))
+	for i, a := range in {
+		out[i] = resolver.AppliedConditional{
+			When:        cloneWhen(a.When),
+			Permissions: sortedStrings(a.Permissions),
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ki, kj := appliedSortKey(out[i]), appliedSortKey(out[j])
+		return ki < kj
+	})
+	return out
+}
+
+// appliedSortKey serialises an AppliedConditional into a string that
+// orders the slice deterministically. The serialisation walks the
+// When map's keys in sorted order and joins each `key=value` pair
+// with NUL separators — the same separator the resolver's
+// encodeModulePath uses, chosen because it cannot legally appear in
+// either an HCL identifier or a YAML scalar. The Permissions slice is
+// appended after a sentinel separator so two AppliedConditionals with
+// the same When but different (legally-impossible-but-defensive)
+// Permissions still order distinctly.
+//
+// Format: `<k1>=<v1>\x00<k2>=<v2>\x00...\x00\x00<perm1>\x00<perm2>...`
+//
+// Values are formatted via fmt.Sprintf("%v") which renders bool /
+// string / int / float64 unambiguously — the catalog's only legal
+// scalar types per ctyValueEqualsLiteral.
+func appliedSortKey(a resolver.AppliedConditional) string {
+	var b strings.Builder
+	keys := make([]string, 0, len(a.When))
+	for k := range a.When {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		fmt.Fprintf(&b, "%v", a.When[k])
+		b.WriteByte('\x00')
+	}
+	// Sentinel separator: a doubled NUL after the When section so the
+	// permission bytes cannot collide with a hypothetical When value
+	// that ends in `=`.
+	b.WriteByte('\x00')
+	for _, p := range a.Permissions {
+		b.WriteString(p)
+		b.WriteByte('\x00')
+	}
+	return b.String()
+}
+
+// cloneStrings returns a shallow copy of in, or nil if in is empty,
+// preserving the `omitempty` behaviour for ModulePath. This mirrors
+// the resolver's cloneModulePath: nil in, nil out so root-level
+// resources keep their `module_path` field absent from JSON output.
+func cloneStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+// cloneWhen returns a shallow copy of a When map. AppliedConditional
+// consumers can mutate the result without leaking back into the
+// catalog's loaded storage. nil in, nil out — matching the resolver's
+// cloneWhen and the AppliedConditional contract that an absent When
+// renders as JSON `null` rather than `{}`. The catalog's only legal
+// When values are scalars (bool / string / int / float64), so a
+// shallow value copy is sufficient — there is no nested storage to
+// alias through.
+func cloneWhen(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
+// moduleLess reports whether a sorts before b under a lexicographic
+// segment-by-segment comparison, with shorter paths sorting before
+// their extensions ([] < [a] < [a, b] < [b]). Mirrors the resolver's
+// own moduleLess so the two packages cannot disagree on
+// ModulePath ordering.
+func moduleLess(a, b []string) bool {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return len(a) < len(b)
 }
 
 // errWriter is an io.Writer adapter that latches the first underlying
