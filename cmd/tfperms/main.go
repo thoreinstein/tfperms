@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/spf13/cobra"
@@ -211,7 +210,7 @@ func runAnalyze(w io.Writer, dir, format, roleName string) error {
 	case formatRole:
 		return reporter.RenderRole(w, result, roleName, version, date)
 	case formatJSON:
-		return reporter.RenderJSON(w, result, len(resources), version, time.Now())
+		return reporter.RenderJSON(w, result, len(resources), version)
 	default:
 		return reporter.Render(w, result, len(resources))
 	}
