@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_logging_project_sink",
+      "name": "audit",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "logging.sinks.create",
+        "logging.sinks.delete",
+        "logging.sinks.get",
+        "logging.sinks.update"
+      ],
+      "applied": []
+    }
+  ]
 }

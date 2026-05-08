@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_instance_group",
+      "name": "static",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.instanceGroups.create",
+        "compute.instanceGroups.delete",
+        "compute.instanceGroups.get",
+        "compute.instanceGroups.update"
+      ],
+      "applied": []
+    }
+  ]
 }

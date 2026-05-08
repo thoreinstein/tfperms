@@ -11,5 +11,18 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_kms_key_ring",
+      "name": "main",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "cloudkms.keyRings.create",
+        "cloudkms.keyRings.get"
+      ],
+      "applied": []
+    }
+  ]
 }

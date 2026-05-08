@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_project",
+      "name": "default",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "resourcemanager.projects.create",
+        "resourcemanager.projects.delete",
+        "resourcemanager.projects.get",
+        "resourcemanager.projects.update"
+      ],
+      "applied": []
+    }
+  ]
 }

@@ -17,5 +17,21 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_global_forwarding_rule",
+      "name": "https",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.globalAddresses.use",
+        "compute.globalForwardingRules.create",
+        "compute.globalForwardingRules.delete",
+        "compute.globalForwardingRules.get",
+        "compute.globalForwardingRules.update"
+      ],
+      "applied": []
+    }
+  ]
 }

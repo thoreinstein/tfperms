@@ -11,5 +11,18 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_storage_bucket_iam_member",
+      "name": "viewer",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "storage.buckets.getIamPolicy",
+        "storage.buckets.setIamPolicy"
+      ],
+      "applied": []
+    }
+  ]
 }

@@ -13,5 +13,19 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_storage_bucket_object",
+      "name": "config",
+      "file": "main.tf",
+      "line": 12,
+      "base_perms": [
+        "storage.objects.create",
+        "storage.objects.get",
+        "storage.objects.update"
+      ],
+      "applied": []
+    }
+  ]
 }

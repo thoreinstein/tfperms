@@ -17,5 +17,21 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_forwarding_rule",
+      "name": "internal",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.addresses.use",
+        "compute.forwardingRules.create",
+        "compute.forwardingRules.delete",
+        "compute.forwardingRules.get",
+        "compute.forwardingRules.update"
+      ],
+      "applied": []
+    }
+  ]
 }

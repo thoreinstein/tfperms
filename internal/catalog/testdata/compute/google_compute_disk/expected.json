@@ -17,5 +17,21 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_disk",
+      "name": "data",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.disks.create",
+        "compute.disks.delete",
+        "compute.disks.get",
+        "compute.disks.setLabels",
+        "compute.disks.update"
+      ],
+      "applied": []
+    }
+  ]
 }

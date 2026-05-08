@@ -13,5 +13,19 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_compute_route",
+      "name": "egress",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "compute.routes.create",
+        "compute.routes.delete",
+        "compute.routes.get"
+      ],
+      "applied": []
+    }
+  ]
 }

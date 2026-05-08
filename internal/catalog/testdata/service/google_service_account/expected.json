@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_service_account",
+      "name": "runtime",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "iam.serviceAccounts.create",
+        "iam.serviceAccounts.delete",
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.update"
+      ],
+      "applied": []
+    }
+  ]
 }

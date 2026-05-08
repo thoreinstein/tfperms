@@ -19,5 +19,22 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_cloudfunctions_function",
+      "name": "hello",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "cloudfunctions.functions.create",
+        "cloudfunctions.functions.delete",
+        "cloudfunctions.functions.get",
+        "cloudfunctions.functions.update",
+        "iam.serviceAccounts.actAs",
+        "storage.objects.get"
+      ],
+      "applied": []
+    }
+  ]
 }

@@ -15,5 +15,20 @@
   ],
   "diagnostics": [],
   "unknowns": [],
-  "unresolved": []
+  "unresolved": [],
+  "resources": [
+    {
+      "type": "google_sql_database_instance",
+      "name": "primary",
+      "file": "main.tf",
+      "line": 4,
+      "base_perms": [
+        "cloudsql.instances.create",
+        "cloudsql.instances.delete",
+        "cloudsql.instances.get",
+        "cloudsql.instances.update"
+      ],
+      "applied": []
+    }
+  ]
 }
