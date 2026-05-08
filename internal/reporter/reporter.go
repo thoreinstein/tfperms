@@ -55,12 +55,17 @@ import (
 //	  ...
 //
 //	unknown resources (2):
-//	  google_dataplex_lake (main.tf:42)
+//	  google_dataplex_lake.primary (main.tf:42)
 //	  ...
 //
 //	unresolved conditionals (3):
 //	  google_storage_bucket.data: uniform_bucket_level_access (main.tf:14) — missing_variable
 //	  ...
+//
+// The summary and section headers carry a 2-space leading indent;
+// list items inside a section carry a 4-space leading indent. The
+// indentation is part of the format contract so consumers can
+// `grep -E '^    '` to extract just the rows.
 //
 // The summary line is always emitted, even on a fully-empty Result, so a
 // downstream consumer piping into `diff` always has a stable first line.
@@ -100,7 +105,7 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 	ew := &errWriter{w: w}
 
 	fmt.Fprintf(ew,
-		"%d %s for %d %s, %d %s, %d %s, %d %s\n",
+		"  %d %s for %d %s, %d %s, %d %s\n",
 		len(res.TotalApplyPerms),
 		plural(len(res.TotalApplyPerms), "permission", "permissions"),
 		resourceCount,
@@ -109,47 +114,45 @@ func Render(w io.Writer, res resolver.Result, resourceCount int) error {
 		plural(len(res.Unknowns), "unknown", "unknowns"),
 		len(res.Unresolved),
 		plural(len(res.Unresolved), "unresolved conditional", "unresolved conditionals"),
-		len(res.Diagnostics),
-		plural(len(res.Diagnostics), "warning", "warnings"),
 	)
 
 	if len(res.PlanPerms) > 0 {
 		fmt.Fprintln(ew)
-		fmt.Fprintf(ew, "plan permissions (%d):\n", len(res.PlanPerms))
+		fmt.Fprintf(ew, "  plan permissions (%d):\n", len(res.PlanPerms))
 		for _, p := range res.PlanPerms {
-			fmt.Fprintf(ew, "  %s\n", p)
+			fmt.Fprintf(ew, "    %s\n", p)
 		}
 	}
 
 	if len(res.ApplyOnlyPerms) > 0 {
 		fmt.Fprintln(ew)
-		fmt.Fprintf(ew, "apply-only permissions (%d):\n", len(res.ApplyOnlyPerms))
+		fmt.Fprintf(ew, "  apply-only permissions (%d):\n", len(res.ApplyOnlyPerms))
 		for _, p := range res.ApplyOnlyPerms {
-			fmt.Fprintf(ew, "  %s\n", p)
+			fmt.Fprintf(ew, "    %s\n", p)
 		}
 	}
 
 	if len(res.Diagnostics) > 0 {
 		fmt.Fprintln(ew)
-		fmt.Fprintf(ew, "warnings (%d):\n", len(res.Diagnostics))
+		fmt.Fprintf(ew, "  warnings (%d):\n", len(res.Diagnostics))
 		for _, d := range res.Diagnostics {
-			fmt.Fprintf(ew, "  %s (%s:%d)\n", d.Summary, d.File, d.Line)
+			fmt.Fprintf(ew, "    %s (%s:%d)\n", d.Summary, d.File, d.Line)
 		}
 	}
 
 	if len(res.Unknowns) > 0 {
 		fmt.Fprintln(ew)
-		fmt.Fprintf(ew, "unknown resources (%d):\n", len(res.Unknowns))
+		fmt.Fprintf(ew, "  unknown resources (%d):\n", len(res.Unknowns))
 		for _, u := range res.Unknowns {
-			fmt.Fprintf(ew, "  %s (%s:%d)\n", u.Type, u.File, u.Line)
+			fmt.Fprintf(ew, "    %s.%s (%s:%d)\n", u.Type, u.Name, u.File, u.Line)
 		}
 	}
 
 	if len(res.Unresolved) > 0 {
 		fmt.Fprintln(ew)
-		fmt.Fprintf(ew, "unresolved conditionals (%d):\n", len(res.Unresolved))
+		fmt.Fprintf(ew, "  unresolved conditionals (%d):\n", len(res.Unresolved))
 		for _, u := range res.Unresolved {
-			fmt.Fprintf(ew, "  %s%s.%s: %s (%s:%d) — %s\n",
+			fmt.Fprintf(ew, "    %s%s.%s: %s (%s:%d) — %s\n",
 				modulePrefix(u.ModulePath), u.ResourceType, u.ResourceName, u.Attribute, u.File, u.Line, u.Reason)
 		}
 	}

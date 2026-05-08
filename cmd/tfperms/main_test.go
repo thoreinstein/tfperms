@@ -114,7 +114,8 @@ resource "google_storage_bucket" "primary" {
 	if !ok {
 		t.Fatalf("output has no summary line; got:\n%s", got)
 	}
-	leading, _, ok := strings.Cut(summary, " ")
+	trimmed := strings.TrimSpace(summary)
+	leading, _, ok := strings.Cut(trimmed, " ")
 	if !ok {
 		t.Fatalf("summary line missing leading count; got: %q", summary)
 	}
@@ -133,7 +134,6 @@ resource "google_storage_bucket" "primary" {
 		"for 1 resource",
 		"0 unknowns",
 		"0 unresolved conditionals",
-		"0 warnings",
 	}
 	for _, part := range wantSummaryParts {
 		if !strings.Contains(summary, part) {
@@ -147,8 +147,8 @@ resource "google_storage_bucket" "primary" {
 	// adds rows must not break this test, but a regression that
 	// drops the .create permission entirely should.
 	wantRows := []string{
-		"  storage.buckets.get",
-		"  storage.buckets.create",
+		"    storage.buckets.get",
+		"    storage.buckets.create",
 	}
 	for _, row := range wantRows {
 		if !strings.Contains(got, row) {
@@ -158,10 +158,16 @@ resource "google_storage_bucket" "primary" {
 
 	// No diagnostic sections — the type is catalogued and the
 	// configuration is fully literal.
-	if strings.Contains(got, "unknown resources (") {
+	//
+	// Anchor on the section-header form ("unknown resources (")
+	// rather than the bare phrase: the summary line legitimately
+	// contains the words "unknowns" and "unresolved conditionals"
+	// with a count prefix, and a naive substring check would
+	// false-positive against them.
+	if strings.Contains(got, "  unknown resources (") {
 		t.Errorf("output unexpectedly contained 'unknown resources' header.\noutput:\n%s", got)
 	}
-	if strings.Contains(got, "unresolved conditionals (") {
+	if strings.Contains(got, "  unresolved conditionals (") {
 		t.Errorf("output unexpectedly contained 'unresolved conditionals' header.\noutput:\n%s", got)
 	}
 }
@@ -189,14 +195,14 @@ resource "google_made_up_thing" "x" {
 
 	got := out.String()
 
-	if !strings.HasPrefix(got, "0 permissions for 1 resource, 1 unknown, 0 unresolved conditionals, 0 warnings\n") {
+	if !strings.HasPrefix(got, "  0 permissions for 1 resource, 1 unknown, 0 unresolved conditionals\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
-	if !strings.Contains(got, "unknown resources (1):") {
+	if !strings.Contains(got, "  unknown resources (1):") {
 		t.Errorf("output missing 'unknown resources' header.\noutput:\n%s", got)
 	}
-	if !strings.Contains(got, "google_made_up_thing") {
-		t.Errorf("output missing unknown resource type.\noutput:\n%s", got)
+	if !strings.Contains(got, "    google_made_up_thing.x") {
+		t.Errorf("output missing unknown resource type.name.\noutput:\n%s", got)
 	}
 }
 
@@ -223,13 +229,13 @@ module "remote" {
 
 	got := out.String()
 
-	if !strings.HasPrefix(got, "0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals, 1 warning\n") {
+	if !strings.HasPrefix(got, "  0 permissions for 0 resources, 0 unknowns, 0 unresolved conditionals\n") {
 		t.Errorf("summary line wrong; got:\n%s", got)
 	}
-	if !strings.Contains(got, "warnings (1):") {
+	if !strings.Contains(got, "  warnings (1):") {
 		t.Errorf("output missing 'warnings' header.\noutput:\n%s", got)
 	}
-	if !strings.Contains(got, "non-local module source (main.tf:2)") {
+	if !strings.Contains(got, "    non-local module source (main.tf:2)") {
 		t.Errorf("output missing expected warning summary and location.\noutput:\n%s", got)
 	}
 }
