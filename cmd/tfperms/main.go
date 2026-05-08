@@ -119,7 +119,16 @@ func runAnalyze(w io.Writer, dir string) error {
 // diagnostics are handled by the parser returning a non-nil error.
 // If a diagnostic's Subject is nil or relativization fails, the
 // filename falls back to "<unknown>".
+//
+// baseDir is the user-supplied input directory and may be relative
+// (e.g. "fixtures/warn") or even "."; parser.LoadRecursive normalizes
+// it via filepath.Abs before populating diagnostic Subject filenames,
+// so we apply the same normalization here. Otherwise filepath.Rel
+// would compare a relative base against an absolute filename, fall
+// into the error branch, and emit absolute paths to the user — the
+// exact regression the prior review caught.
 func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnostic {
+	absBase, absErr := filepath.Abs(baseDir)
 	out := make([]resolver.Diagnostic, 0)
 	for _, d := range diags {
 		if d.Severity != hcl.DiagWarning {
@@ -129,10 +138,11 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 		line := 0
 		if d.Subject != nil {
 			line = d.Subject.Start.Line
-			if rel, err := filepath.Rel(baseDir, d.Subject.Filename); err == nil {
-				file = rel
-			} else {
-				file = d.Subject.Filename
+			file = d.Subject.Filename
+			if absErr == nil {
+				if rel, err := filepath.Rel(absBase, d.Subject.Filename); err == nil {
+					file = rel
+				}
 			}
 		}
 		out = append(out, resolver.Diagnostic{
