@@ -117,8 +117,9 @@ func runAnalyze(w io.Writer, dir string) error {
 // resolver.Diagnostic, filtering for warnings and relativizing file
 // paths against baseDir. Only warnings are converted; error-severity
 // diagnostics are handled by the parser returning a non-nil error.
-// If a diagnostic's Subject is nil or relativization fails, the
-// filename falls back to "<unknown>".
+// If a diagnostic's Subject is nil, the filename falls back to
+// "<unknown>". If filepath.Abs or filepath.Rel fails, the diagnostic
+// retains its original Subject.Filename (typically an absolute path).
 //
 // baseDir is the user-supplied input directory and may be relative
 // (e.g. "fixtures/warn") or even "."; parser.LoadRecursive normalizes
