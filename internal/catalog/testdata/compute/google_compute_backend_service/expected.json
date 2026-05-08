@@ -13,6 +13,7 @@
     "compute.backendServices.get",
     "compute.backendServices.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

@@ -13,6 +13,7 @@
     "cloudsql.databases.get",
     "cloudsql.databases.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

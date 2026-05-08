@@ -11,6 +11,7 @@
     "compute.routes.delete",
     "compute.routes.get"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

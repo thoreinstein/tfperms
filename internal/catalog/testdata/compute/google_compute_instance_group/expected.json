@@ -13,6 +13,7 @@
     "compute.instanceGroups.get",
     "compute.instanceGroups.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

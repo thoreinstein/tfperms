@@ -89,6 +89,9 @@ import (
 //
 // Diagnostic fields:
 //
+//   - Diagnostics: parse-level warnings encountered during configuration
+//     loading (e.g. non-local module sources, locals dependency cycles).
+//     Each entry carries a Summary and the source File:Line.
 //   - Unknowns: Terraform resource types observed in the input that
 //     were not present in any of the catalog's three sections, with
 //     the source File:Line so the reporter can point the user at the
@@ -123,8 +126,19 @@ type Result struct {
 	PlanPerms       []string                `json:"plan_perms"`
 	ApplyOnlyPerms  []string                `json:"apply_only_perms"`
 	TotalApplyPerms []string                `json:"total_apply_perms"`
+	Diagnostics     []Diagnostic            `json:"diagnostics"`
 	Unknowns        []UnknownResource       `json:"unknowns"`
 	Unresolved      []UnresolvedConditional `json:"unresolved"`
+}
+
+// Diagnostic describes a single parse-level warning encountered during
+// configuration loading. The reporter surfaces these so users can see
+// if the analysis was incomplete due to non-local modules or other
+// parse-stage issues.
+type Diagnostic struct {
+	Summary string `json:"summary"`
+	File    string `json:"file"`
+	Line    int    `json:"line"`
 }
 
 // UnknownResource describes a single Terraform resource or data block
@@ -257,6 +271,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog) Result {
 		PlanPerms:       planPerms,
 		ApplyOnlyPerms:  applyOnlyPerms,
 		TotalApplyPerms: totalApplyPerms,
+		Diagnostics:     []Diagnostic{},
 		Unknowns:        sortedUnknowns(unknowns),
 		Unresolved:      sortedUnresolved(unresolved),
 	}

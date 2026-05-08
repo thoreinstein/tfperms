@@ -13,6 +13,7 @@
     "compute.addresses.get",
     "compute.addresses.setLabels"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

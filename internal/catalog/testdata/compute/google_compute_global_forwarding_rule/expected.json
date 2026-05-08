@@ -15,6 +15,7 @@
     "compute.globalForwardingRules.get",
     "compute.globalForwardingRules.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

@@ -13,6 +13,7 @@
     "compute.globalAddresses.get",
     "compute.globalAddresses.setLabels"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

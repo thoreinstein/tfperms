@@ -15,6 +15,7 @@
     "run.services.get",
     "run.services.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

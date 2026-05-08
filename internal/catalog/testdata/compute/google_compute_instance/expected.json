@@ -25,6 +25,7 @@
     "compute.subnetworks.use",
     "iam.serviceAccounts.actAs"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

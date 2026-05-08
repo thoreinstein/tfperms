@@ -13,6 +13,7 @@
     "compute.firewalls.get",
     "compute.firewalls.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

@@ -11,6 +11,7 @@
     "storage.objects.get",
     "storage.objects.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

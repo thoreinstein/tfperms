@@ -13,6 +13,7 @@
     "compute.healthChecks.get",
     "compute.healthChecks.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

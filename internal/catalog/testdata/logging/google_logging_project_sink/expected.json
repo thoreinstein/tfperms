@@ -13,6 +13,7 @@
     "logging.sinks.get",
     "logging.sinks.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

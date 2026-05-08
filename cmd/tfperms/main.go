@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
+	"github.com/hashicorp/hcl/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/thoreinstein/tfperms/internal/catalog"
@@ -97,16 +99,8 @@ func newRootCmd() *cobra.Command {
 // counting each module-instance copy as its own resource. This is the
 // definition tfperms-ftq.1 calls "distinct resources (counting module
 // instances)".
-//
-// hcl.Diagnostics returned from parser.LoadRecursive are intentionally
-// dropped here. The parser surfaces nested-module parse failures as
-// warnings; rendering them belongs alongside the unresolved /
-// unknowns sections of the report and is tracked by tfperms-ftq.6
-// (render unknowns and unresolved per format). Wiring them in this
-// commit would expand the surface beyond the plan; flag in Issues so
-// the reviewer sees the deferred work.
 func runAnalyze(w io.Writer, dir string) error {
-	resources, _, _, err := parser.LoadRecursive(dir)
+	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
 		return fmt.Errorf("load %q: %w", dir, err)
 	}
@@ -115,7 +109,39 @@ func runAnalyze(w io.Writer, dir string) error {
 		return fmt.Errorf("load catalog: %w", err)
 	}
 	result := resolver.Resolve(resources, cat)
+	result.Diagnostics = relativizeDiags(diags, dir)
 	return reporter.Render(w, result, len(resources))
+}
+
+// relativizeDiags converts hcl.Diagnostics to a slice of
+// resolver.Diagnostic, filtering for warnings and relativizing file
+// paths against baseDir. Only warnings are converted; error-severity
+// diagnostics are handled by the parser returning a non-nil error.
+// If a diagnostic's Subject is nil or relativization fails, the
+// filename falls back to "<unknown>".
+func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnostic {
+	out := make([]resolver.Diagnostic, 0)
+	for _, d := range diags {
+		if d.Severity != hcl.DiagWarning {
+			continue
+		}
+		file := "<unknown>"
+		line := 0
+		if d.Subject != nil {
+			line = d.Subject.Start.Line
+			if rel, err := filepath.Rel(baseDir, d.Subject.Filename); err == nil {
+				file = rel
+			} else {
+				file = d.Subject.Filename
+			}
+		}
+		out = append(out, resolver.Diagnostic{
+			Summary: d.Summary,
+			File:    file,
+			Line:    line,
+		})
+	}
+	return out
 }
 
 func main() {

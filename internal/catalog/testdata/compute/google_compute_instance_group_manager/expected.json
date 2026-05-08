@@ -17,6 +17,7 @@
     "compute.instanceTemplates.useReadOnly",
     "iam.serviceAccounts.actAs"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

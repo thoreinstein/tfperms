@@ -13,6 +13,7 @@
     "iam.serviceAccounts.get",
     "iam.serviceAccounts.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

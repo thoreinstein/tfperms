@@ -13,6 +13,7 @@
     "compute.urlMaps.get",
     "compute.urlMaps.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

@@ -13,6 +13,7 @@
     "pubsub.subscriptions.get",
     "pubsub.subscriptions.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }

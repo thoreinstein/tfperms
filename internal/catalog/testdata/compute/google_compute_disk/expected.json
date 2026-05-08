@@ -15,6 +15,7 @@
     "compute.disks.setLabels",
     "compute.disks.update"
   ],
+  "diagnostics": [],
   "unknowns": [],
   "unresolved": []
 }
