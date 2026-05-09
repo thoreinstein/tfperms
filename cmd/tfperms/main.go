@@ -186,6 +186,21 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			format = effective
+			// Spec contract: --role-name without --format=role produces
+			// a warning, not an error. The role name is unused outside
+			// the role formatter, so silently accepting it is a UX trap
+			// (the user typed something they expected to take effect).
+			// We surface the warning to stderr, mention the offending
+			// flag pair, and continue — the rest of the pipeline runs.
+			// Validation of the regex is deferred to validateFormatFlags
+			// (which now only enforces it under --format=role); here we
+			// notice that the user passed --role-name at all without the
+			// format that would consume it.
+			if roleName != "" && format != formatRole {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"warning: --role-name=%q is ignored without --format=role\n",
+					roleName)
+			}
 			// --exclude-delete is sugar for --include-delete=false,
 			// so it only overrides when the user actually asked to
 			// exclude (the truthy form). An explicit
@@ -230,7 +245,7 @@ func newRootCmd() *cobra.Command {
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	cmd.Flags().StringVar(&format, "format", formatFlat, "output format: flat (default human-readable list), by-resource (grouped by resource type), role (GCP custom-role YAML), or json")
-	cmd.Flags().StringVar(&roleName, "role-name", "", "GCP custom-role ID; whenever provided must match ^[a-zA-Z0-9_]{3,64}$, and is required with --format=role")
+	cmd.Flags().StringVar(&roleName, "role-name", "", "GCP custom-role ID; required with --format=role and must match ^[a-zA-Z0-9_]{3,64}$ there. Without --format=role the value is ignored (warning emitted) rather than validated")
 	cmd.Flags().BoolVar(&byResource, "by-resource", false, "shorthand for --format=by-resource; mutually exclusive with --format")
 	// --quiet only suppresses display sections in the flat / by-resource
 	// formats; the role and json formats are unaffected (the JSON
@@ -311,16 +326,21 @@ func resolveFormat(format string, formatExplicit, byResource bool) (string, erro
 //     used as both the YAML title and the gcloud command's role-ID
 //     positional argument; a missing name would generate a file gcloud
 //     cannot apply.
-//   - When --role-name is provided (regardless of --format), it must
-//     match roleNameRE. We validate the value even under --format=flat
-//     so a user who sets the name first and forgets to flip --format
-//     gets a clear error rather than having the name silently
-//     ignored — the most user-hostile of the available behaviours.
+//   - When --format=role and --role-name is provided, it must match
+//     roleNameRE — the YAML's title and the gcloud role-ID positional
+//     are derived from this value, and a non-conforming name produces
+//     a file gcloud will reject. Validation is gated on --format=role
+//     because the spec frames --role-name as "ignored otherwise" and
+//     mandates a warning (not a hard error) when the user passes it
+//     without the role formatter — the warning is emitted by PreRunE,
+//     and we deliberately do not error here on a malformed value
+//     outside the role formatter.
 //
 // Every returned error names the offending flag (cobra's default
 // error printing does not include the flag name): an unknown
 // --format value, a missing --role-name when --format=role, or a
-// --role-name that does not match the GCP custom-role-ID regex.
+// --role-name that does not match the GCP custom-role-ID regex
+// under --format=role.
 func validateFormatFlags(format, roleName string) error {
 	switch format {
 	case formatFlat, formatByResource, formatRole, formatJSON:
@@ -329,11 +349,13 @@ func validateFormatFlags(format, roleName string) error {
 		return fmt.Errorf("invalid --format %q: must be one of %q, %q, %q, or %q",
 			format, formatFlat, formatByResource, formatRole, formatJSON)
 	}
-	if format == formatRole && roleName == "" {
-		return fmt.Errorf("--format=%s requires --role-name", formatRole)
-	}
-	if roleName != "" && !roleNameRE.MatchString(roleName) {
-		return fmt.Errorf("invalid --role-name %q: must match %s", roleName, roleNameRE.String())
+	if format == formatRole {
+		if roleName == "" {
+			return fmt.Errorf("--format=%s requires --role-name", formatRole)
+		}
+		if !roleNameRE.MatchString(roleName) {
+			return fmt.Errorf("invalid --role-name %q: must match %s", roleName, roleNameRE.String())
+		}
 	}
 	return nil
 }

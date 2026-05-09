@@ -649,10 +649,18 @@ func TestRootCommandRejectsExtraArgs(t *testing.T) {
 // TestValidateFormatFlags pins the cobra-independent flag-validation
 // contract. Each row covers one of the rejection rules in
 // validateFormatFlags: unknown --format value, --format=role missing
-// --role-name, --role-name failing the regex (too short, illegal
-// character, too long), and the happy paths for both formats. Driving
-// the helper directly keeps the assertions on validation logic
-// rather than on cobra's error-formatting plumbing.
+// --role-name, --role-name failing the regex under --format=role,
+// and the happy paths for both formats.
+//
+// Per the spec, --role-name regex validation is gated on --format=role:
+// passing --role-name with any other format is "ignored otherwise" and
+// surfaces as a stderr warning (emitted by PreRunE — see
+// TestRootCommandRoleNameWithoutRoleFormatWarns), not an error. The
+// rows below assert that contract explicitly: every "non-role format
+// with a malformed role-name" case is wantError: false, because the
+// warning path lives in PreRunE rather than this helper. Driving the
+// helper directly keeps the assertions on validation logic rather
+// than on cobra's error-formatting plumbing.
 func TestValidateFormatFlags(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -662,7 +670,10 @@ func TestValidateFormatFlags(t *testing.T) {
 	}{
 		{name: "default flat empty role-name", format: "flat", roleName: "", wantError: false},
 		{name: "flat with valid role-name", format: "flat", roleName: "my_role", wantError: false},
-		{name: "flat with invalid role-name", format: "flat", roleName: "ab", wantError: true},
+		// Spec: --role-name without --format=role is ignored (warning),
+		// not an error. The malformed value is not validated here
+		// because the role formatter never sees it.
+		{name: "flat with invalid role-name does not error", format: "flat", roleName: "ab", wantError: false},
 		{name: "role with valid role-name", format: "role", roleName: "my_role", wantError: false},
 		{name: "role missing role-name", format: "role", roleName: "", wantError: true},
 		{name: "role with too-short role-name", format: "role", roleName: "ab", wantError: true},
@@ -672,7 +683,11 @@ func TestValidateFormatFlags(t *testing.T) {
 		{name: "role with 3-char role-name boundary", format: "role", roleName: "abc", wantError: false},
 		{name: "by-resource happy path", format: "by-resource", roleName: "", wantError: false},
 		{name: "by-resource ignores role-name with valid value", format: "by-resource", roleName: "my_role", wantError: false},
-		{name: "by-resource rejects invalid role-name", format: "by-resource", roleName: "a!b", wantError: true},
+		// Companion to the flat case above: by-resource also takes the
+		// warning path, so a malformed role-name is not a validation
+		// error here.
+		{name: "by-resource ignores invalid role-name (no error)", format: "by-resource", roleName: "a!b", wantError: false},
+		{name: "json ignores invalid role-name (no error)", format: "json", roleName: "a!b", wantError: false},
 		{name: "json happy path", format: "json", roleName: "", wantError: false},
 		{name: "unknown format", format: "yaml", roleName: "", wantError: true},
 		{name: "empty format", format: "", roleName: "", wantError: true},
@@ -733,6 +748,149 @@ func TestRootCommandRejectsInvalidRoleName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--role-name") {
 		t.Errorf("error message should mention --role-name; got: %v", err)
+	}
+}
+
+// TestRootCommandRoleNameWithoutRoleFormatWarns pins the spec contract
+// that --role-name passed without --format=role produces a stderr
+// warning, not an error. The previous implementation hard-errored on a
+// malformed role-name regardless of format and silently accepted a
+// valid one, both of which contradict the spec's "ignored otherwise
+// (warning if set without --format=role)" rule.
+//
+// We assert three things in one run:
+//
+//   - Execute returns nil — the pipeline keeps running because the
+//     unused flag is not a fatal error.
+//   - Stderr (separated from stdout via SetErr to a distinct buffer so
+//     the warning-on-stderr contract is observable) contains the
+//     warning prefix and names --role-name and --format=role so the
+//     user can act on the message without consulting --help.
+//   - Stdout still carries the analysis output (the storage-bucket
+//     summary line), proving the warning did not abort the pipeline.
+//
+// The fixture is the shared writeFixture helper so the test inherits
+// the catalogued resource that produces a non-empty summary; the
+// assertion targets the leading "permissions for" phrase rather than a
+// specific permission count to stay catalog-resilient.
+func TestRootCommandRoleNameWithoutRoleFormatWarns(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-warn-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"--role-name=my_role", dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute returned %v; expected warning-only path, not error.\nstdout:\n%s\nstderr:\n%s",
+			err, stdout.String(), stderr.String())
+	}
+
+	gotErr := stderr.String()
+	if !strings.Contains(gotErr, "warning:") {
+		t.Errorf("stderr missing 'warning:' prefix; got: %q", gotErr)
+	}
+	if !strings.Contains(gotErr, "--role-name") {
+		t.Errorf("stderr warning should name --role-name; got: %q", gotErr)
+	}
+	if !strings.Contains(gotErr, "--format=role") {
+		t.Errorf("stderr warning should name --format=role so the user knows the gating flag; got: %q", gotErr)
+	}
+
+	gotOut := stdout.String()
+	if !strings.Contains(gotOut, "permissions for ") {
+		t.Errorf("stdout should still carry the analysis summary line; got:\n%s", gotOut)
+	}
+}
+
+// TestRootCommandInvalidRoleNameWithoutRoleFormatWarns pins the
+// regression that a malformed --role-name (one that would be rejected
+// under --format=role) is also "warned, not errored" when --format is
+// not role. Pre-spec, this case hard-errored with the regex message
+// and aborted the pipeline; the spec is explicit that --role-name is
+// "ignored otherwise" and the user should see a warning rather than
+// have their analysis blocked by a flag that would not affect the
+// chosen format.
+//
+// The split-stream stderr capture mirrors
+// TestRootCommandRoleNameWithoutRoleFormatWarns so the warning surface
+// is observable without scraping it out of stdout.
+func TestRootCommandInvalidRoleNameWithoutRoleFormatWarns(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-bad-name-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	// "bad-name" contains a hyphen, which the role-ID regex rejects;
+	// under --format=role this would be a validation error.
+	root.SetArgs([]string{"--role-name=bad-name", dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute with malformed --role-name (no --format=role) returned %v; expected warning, not error.\nstdout:\n%s\nstderr:\n%s",
+			err, stdout.String(), stderr.String())
+	}
+
+	gotErr := stderr.String()
+	if !strings.Contains(gotErr, "warning:") {
+		t.Errorf("stderr missing 'warning:' prefix; got: %q", gotErr)
+	}
+	if !strings.Contains(gotErr, "--role-name") {
+		t.Errorf("stderr warning should name --role-name; got: %q", gotErr)
+	}
+	// The warning is about the flag being ignored, not about regex
+	// shape — a regression that surfaced "must match ^[a-zA-Z0-9_]..."
+	// here would be validating regex outside --format=role, which the
+	// spec forbids.
+	if strings.Contains(gotErr, "must match") {
+		t.Errorf("stderr should not surface regex-validation phrasing outside --format=role; got: %q", gotErr)
+	}
+}
+
+// TestRootCommandRoleFormatNoSpuriousWarning is the negative companion
+// to TestRootCommandRoleNameWithoutRoleFormatWarns: when --format=role
+// is set alongside --role-name, the warning must NOT fire (the flag is
+// being used for its intended purpose). A regression that emitted the
+// warning unconditionally would clutter every legitimate role-format
+// invocation's stderr.
+func TestRootCommandRoleFormatNoSpuriousWarning(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-role-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"--format=role", "--role-name=my_role", dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	if stderr.Len() != 0 {
+		t.Errorf("--format=role with --role-name should not emit a warning to stderr; got: %q",
+			stderr.String())
 	}
 }
 
