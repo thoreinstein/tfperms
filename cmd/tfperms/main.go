@@ -96,6 +96,36 @@ const (
 // recompiling the regex per construction shows up in test timings.
 var roleNameRE = regexp.MustCompile(`^[a-zA-Z0-9_]{3,64}$`)
 
+// parseLoadError marks an error as originating from the parse/load
+// stage of the pipeline (filesystem validation, HCL parsing, catalog
+// loading) rather than from CLI usage validation. run() inspects the
+// error chain via errors.As to map these failures onto exit code 2,
+// distinct from the exit code 1 used for usage errors (bad flags,
+// extra positional arguments, etc.). Keeping the marker as a thin
+// wrapper that delegates Error() and Unwrap() to the inner error means
+// the user-visible message is unchanged: the type is metadata for the
+// dispatch in run(), not a user-facing rewrite.
+//
+// The type is unexported because the exit-code contract is a CLI-only
+// concern; nothing outside this package should depend on it.
+type parseLoadError struct {
+	err error
+}
+
+func (e *parseLoadError) Error() string { return e.err.Error() }
+func (e *parseLoadError) Unwrap() error { return e.err }
+
+// newParseLoadError wraps err with the parseLoadError marker so run()
+// classifies it as a parse/load failure (exit code 2). A nil err
+// returns nil so callers can use the helper unconditionally on an
+// error-returning expression without re-checking for nil first.
+func newParseLoadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &parseLoadError{err: err}
+}
+
 // newRootCmd returns the `tfperms` cobra command tree.
 //
 // The root command analyses a Terraform configuration and prints the
@@ -248,13 +278,27 @@ func newRootCmd() *cobra.Command {
 			path := args[0]
 			info, err := os.Stat(path)
 			if err != nil {
+				// Both branches are parse/load failures (the user pointed
+				// at a path the analyser cannot read), so wrap them with
+				// parseLoadError. run() classifies wrapped errors as
+				// exit code 2 — distinct from the exit code 1 used for
+				// usage errors — which is the right CI signal: "the
+				// configuration could not be analysed", not "the user
+				// passed a bad flag". The Error()/Unwrap() pass-through
+				// on parseLoadError preserves the existing message shape
+				// so TestRootCommandErrorsOnNonexistentPath and
+				// TestRootCommandSurfacesNonENOENTStatError still pin the
+				// same byte-stable text.
 				if errors.Is(err, fs.ErrNotExist) {
-					return fmt.Errorf("tfperms: directory not found: %s", path)
+					return newParseLoadError(fmt.Errorf("tfperms: directory not found: %s", path))
 				}
-				return fmt.Errorf("tfperms: %w", err)
+				return newParseLoadError(fmt.Errorf("tfperms: %w", err))
 			}
 			if !info.IsDir() {
-				return fmt.Errorf("tfperms: expected a directory, got a file: %s\n  (run 'tfperms <directory>' instead)", path)
+				// Same classification: a file passed where a directory
+				// was expected is an analysis-input failure (exit 2),
+				// not a flag-shape error.
+				return newParseLoadError(fmt.Errorf("tfperms: expected a directory, got a file: %s\n  (run 'tfperms <directory>' instead)", path))
 			}
 			return runAnalyze(cmd.OutOrStdout(), path, format, roleName, quiet, includeDelete)
 		},
@@ -433,10 +477,26 @@ func validateFormatFlags(format, roleName string) error {
 func runAnalyze(w io.Writer, dir, format, roleName string, quiet, includeDelete bool) error {
 	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
-		return err
+		// Parser failures are parse/load failures by definition. Wrap
+		// with parseLoadError so run() returns exit code 2 — a
+		// malformed HCL fixture is an "execution error" in the
+		// CI/CD-contract sense (the analyser could not consume the
+		// input), not a CLI-usage error. The wrapping preserves the
+		// underlying message via Unwrap so callers using errors.Is /
+		// errors.As against the parser's own sentinel errors keep
+		// working.
+		return newParseLoadError(err)
 	}
 	cat, err := catalog.Load()
 	if err != nil {
+		// catalog.Load() already wraps with catalog.ErrCatalog. We add
+		// the user-facing prefix and bug-report hint, but the
+		// ErrCatalog sentinel remains reachable in the error chain via
+		// errors.Is — which is what run()'s dispatch checks to assign
+		// exit code 2. We deliberately do NOT also wrap with
+		// parseLoadError here: the ErrCatalog branch is its own
+		// classification surface and double-marking the same error
+		// would just be noise.
 		return fmt.Errorf("tfperms: catalog corrupt — please file an issue: %w", err)
 	}
 	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{ExcludeDelete: !includeDelete})
@@ -565,6 +625,28 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 // the standard Go pattern for this — main does I/O setup and process
 // exit, run does the work.
 //
+// Exit codes are stable CI/CD contract:
+//
+//   - 0  Analysis completed successfully. Advisory unknowns / unresolved
+//     conditionals are NOT failures — they are reported alongside the
+//     permission set per the v1 spec.
+//   - 1  Usage error. The user passed an invalid flag, an unknown
+//     --format value, an extra positional argument, or any other input
+//     that the CLI surface rejects before the pipeline runs. Cobra's
+//     own argument-validation errors land here too.
+//   - 2  Execution error. The parse / load stage of the pipeline failed
+//     (missing directory, file passed where a directory was expected,
+//     malformed HCL, corrupt embedded catalog) or an internal panic
+//     was recovered. A code 2 is the right hard-fail signal for CI:
+//     the configuration could not be analysed, regardless of what its
+//     contents would have implied.
+//
+// Classification: errors wrapped in *parseLoadError, or any error whose
+// chain contains catalog.ErrCatalog, get exit code 2; everything else
+// gets exit code 1. Recovered panics are unconditionally code 2 — a
+// panic is by definition an unexpected internal failure, not a user
+// usage problem.
+//
 // Error reporting policy: every error that reaches stderr is prefixed
 // with `tfperms: ` exactly once. Errors built inside the codebase
 // already carry the prefix (validateFormatFlags, resolveFormat, the
@@ -573,25 +655,26 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 // libraries) are prefixed here so the user sees one consistent shape
 // regardless of which layer rejected the input. The `if !strings.HasPrefix`
 // guard prevents the prefix from being doubled when the error already
-// carries it.
+// carries it. Wrapping in parseLoadError does not change the message
+// because parseLoadError.Error() delegates to the wrapped error.
 func run(cmd *cobra.Command, stderr io.Writer) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
 			// A panic during Execute is by definition an internal bug,
 			// not user error. Render a single-line message that names
 			// the panic value (which may be an error, a string, or any
-			// arbitrary value) and exit non-zero. We deliberately do
-			// NOT print the stack trace — the user is a Terraform
-			// operator, not a tfperms developer, and the trace would
-			// bury the actionable summary. A developer reproducing the
-			// bug locally can re-run without the recover for a full
-			// trace.
+			// arbitrary value) and exit with code 2 (execution error).
+			// We deliberately do NOT print the stack trace — the user
+			// is a Terraform operator, not a tfperms developer, and the
+			// trace would bury the actionable summary. A developer
+			// reproducing the bug locally can re-run without the
+			// recover for a full trace.
 			//
 			// `code` is a named return so the deferred recover can set
 			// the exit status without re-entering the normal return
 			// path (Go's deferred functions can mutate named returns).
 			fmt.Fprintf(stderr, "tfperms: internal error (panic): %v\n", r)
-			code = 1
+			code = 2
 		}
 	}()
 	if err := cmd.Execute(); err != nil {
@@ -608,6 +691,18 @@ func run(cmd *cobra.Command, stderr io.Writer) (code int) {
 			msg = "tfperms: " + msg
 		}
 		fmt.Fprintln(stderr, msg)
+		// Classify: parse/load failures and catalog corruption are exit
+		// code 2 (execution error); everything else (cobra argument
+		// validation, PreRunE flag validation, third-party errors) is
+		// exit code 1 (usage error). errors.As walks the chain so a
+		// parseLoadError wrapped further upstream is still detected;
+		// errors.Is on catalog.ErrCatalog handles the catalog-load
+		// branch where runAnalyze adds its own prefix on top of the
+		// already-ErrCatalog-wrapped inner error.
+		var ple *parseLoadError
+		if errors.As(err, &ple) || errors.Is(err, catalog.ErrCatalog) {
+			return 2
+		}
 		return 1
 	}
 	return 0
