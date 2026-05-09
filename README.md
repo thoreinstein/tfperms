@@ -1,88 +1,217 @@
 # tfperms
 
-`tfperms` is a Go project building toward a static analyser that reads
-a Terraform configuration targeting Google Cloud Platform and reports
-the minimum IAM permissions required to run `terraform plan` and
-`terraform apply` against it. The goal is to replace `roles/editor`-style
-over-provisioning with a custom-role permission set the author can
-audit and justify.
+[![CI](https://github.com/thoreinstein/tfperms/actions/workflows/ci.yml/badge.svg)](https://github.com/thoreinstein/tfperms/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go)](go.mod)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-What ships today is the foundation that analyser will consume: a
-curated catalog mapping Terraform GCP-provider resource, data-source,
-and IAM-binding types onto IAM permissions, navigable via the
-`tfperms catalog` subcommands (`scaffold` for stub entries, `stats` for
-catalog health). The Terraform-configuration analyser that resolves a
-real `*.tf` tree against this catalog from the root command is the
-project's in-progress work, not a current feature.
+**Minimum IAM permissions for Terraform GCP configs.**
 
-The tool is a single Go binary. It does not contact GCP, does not need
-credentials, and does not consume `terraform plan` JSON — the planned
-analyser will parse the HCL on disk and resolve it against the embedded
-permission catalog.
+`tfperms` statically analyses a Terraform configuration that targets Google
+Cloud Platform and reports the smallest set of IAM permissions a service
+account needs to run `terraform plan` and `terraform apply` against it. One
+command, no live GCP calls, no `terraform plan` JSON, no credentials.
 
-## What's in the box
+## Problem
 
-- `cmd/tfperms` — the CLI entry point and `tfperms catalog ...`
-  subcommands (`scaffold`, `stats`).
-- `internal/parser` — HCL parsing and resolution.
-- `internal/catalog` — schema, loader, validator, and stats for the
-  YAML permission catalog.
-- `catalog/*.yaml` — the permission catalog itself, partitioned by GCP
-  service family. This is where most contributions land.
-- `docs/tfperms_pdr.md` — product requirements doc; useful background
-  if you are deciding whether a change is in or out of scope.
+Terraform configurations targeting GCP need a service account with enough
+IAM permissions to plan and apply. In practice those service accounts get
+broad predefined roles like `roles/editor` or `roles/owner` because working
+out the actual minimum permission set is tedious and error-prone. The
+alternatives are worse: an under-provisioned account produces a cryptic
+403 mid-`apply`, often leaving infrastructure in a partially-modified
+state.
 
-## Quick start
+Concretely: pinning down the permissions for one Cloud Run service, one
+Cloud SQL instance, and one bucket means cross-referencing roughly thirty
+permission docs by hand, and the answer goes stale the moment a new
+resource type lands. `tfperms` makes that one command.
+
+## Install
 
 ```sh
+# Go install (any platform with Go 1.24+).
 go install github.com/thoreinstein/tfperms/cmd/tfperms@latest
-tfperms catalog stats                                # summarise the embedded catalog
-tfperms catalog scaffold google_<service>_<resource> # write a stub entry under ./catalog/
+
+# Homebrew (macOS / Linux).
+brew install thoreinstein/tap/tfperms
 ```
 
-`tfperms catalog --help` lists every supported subcommand. Running
-`tfperms <path>` analyses the given Terraform directory using the
-in-progress (experimental) analyser, subject to the exit-code contract
-documented below.
+For pinned binaries, download the release artifact for your platform from
+[the GitHub releases page](https://github.com/thoreinstein/tfperms/releases)
+and put the extracted `tfperms` binary on your `PATH`.
 
-### Exit codes
+## Usage
 
-`tfperms` returns one of three exit codes so CI/CD pipelines can
-distinguish "the analyser ran and found a permission set" from
-"something the user can fix" from "something that prevented analysis
-from running at all". Advisory unknowns and unresolved conditionals
-are NOT failures: the v1 spec frames them as diagnostic output
-alongside a successful analysis.
+`tfperms` takes a path to a Terraform directory and emits the permissions
+required to plan and apply it. Output is deterministic and sorted, so
+piping into `diff` between commits is a supported workflow.
 
-| Code | Meaning | Examples |
-|------|---------|----------|
-| 0    | Analysis completed successfully. | The configuration was parsed, resolved, and rendered. Unknowns / unresolved conditionals may appear in the output but the run is considered a success. |
-| 1    | Usage error. The CLI rejected the invocation before the pipeline ran. | Invalid `--format` value, missing `--role-name` with `--format=role`, extra positional arguments, conflicting `--by-resource` / `--format`. |
-| 2    | Execution error. Analysis could not be performed, or the result could not be delivered. | Directory does not exist, path was a file rather than a directory, HCL could not be parsed, embedded catalog is corrupt, the rendered output could not be written (broken stdout pipe, short write, JSON encode failure), internal panic was recovered. |
+The examples below run against the catalog test fixture
+`internal/catalog/testdata/storage/google_storage_bucket/`, which contains
+a single `google_storage_bucket` resource and a matching data source.
 
-For local development:
+### Flat list (default)
 
 ```sh
-make build           # build ./tfperms in the working directory
-make test            # run the full test suite
-make catalog-validate # assert the committed catalog satisfies all schema and provenance rules
-make lint            # run golangci-lint with .golangci.yml
-make help            # list every documented Make target
+$ tfperms ./infra
+  6 permissions for 2 resources, 0 unknowns, 0 unresolved conditionals
+
+  plan permissions (2):
+    storage.buckets.get
+    storage.buckets.getIamPolicy
+
+  apply-only permissions (4):
+    storage.buckets.create
+    storage.buckets.delete
+    storage.buckets.setIamPolicy
+    storage.buckets.update
 ```
+
+The header line is the at-a-glance summary; the two sections split
+plan-only permissions from the additional permissions `terraform apply`
+requires on top of plan.
+
+### Grouped by resource (debugging)
+
+```sh
+$ tfperms ./infra --by-resource
+  6 permissions for 2 resources, 0 unknowns, 0 unresolved conditionals
+
+  google_storage_bucket (2 instances):
+    google_storage_bucket.primary (main.tf:10)
+    google_storage_bucket.lookup (main.tf:16)
+  plan permissions (2):
+    storage.buckets.get
+    storage.buckets.getIamPolicy  # from conditional uniform_bucket_level_access=true
+  apply-only permissions (4):
+    storage.buckets.create
+    storage.buckets.delete
+    storage.buckets.setIamPolicy  # from conditional uniform_bucket_level_access=true
+    storage.buckets.update
+```
+
+Use this when an unexpected permission shows up and you want to know which
+resource block produced it. Trailing `# from conditional ...` annotations
+mark permissions added by attribute-gated rules in the catalog.
+
+### Custom role YAML
+
+```sh
+$ tfperms ./infra --format=role --role-name=tf_pipeline
+# Generated by tfperms 0.0.0-dev on unknown
+#
+# Apply this role with:
+#   gcloud iam roles create tf_pipeline --project=PROJECT_ID --file=role.yaml
+title: tf_pipeline
+stage: GA
+includedPermissions:
+  - storage.buckets.create
+  - storage.buckets.delete
+  - storage.buckets.get
+  - storage.buckets.getIamPolicy
+  - storage.buckets.setIamPolicy
+  - storage.buckets.update
+```
+
+Pipe the YAML straight into `gcloud iam roles create`. The header comment
+embeds the literal command so you do not have to look it up. `--role-name`
+must match `^[a-zA-Z0-9_]{3,64}$` — GCP's custom-role ID rule.
+
+For pipelines that consume the output programmatically, `--format=json`
+emits the same data as a versioned schema (see
+[`docs/json-schema.md`](docs/json-schema.md)).
+
+## Multi-project aliased providers
+
+A configuration can target multiple GCP projects using aliased provider
+blocks. `tfperms` permissions are project-agnostic — the same permission
+set applies regardless of which project the resource lands in — so the
+output covers the union of all referenced projects.
+
+```hcl
+provider "google" {
+  alias   = "prod"
+  project = "my-org-prod"
+  region  = "us-central1"
+}
+
+provider "google" {
+  alias   = "staging"
+  project = "my-org-staging"
+  region  = "us-central1"
+}
+
+resource "google_storage_bucket" "prod_logs" {
+  provider = google.prod
+  name     = "my-org-prod-logs"
+  location = "US"
+}
+
+resource "google_storage_bucket" "staging_logs" {
+  provider = google.staging
+  name     = "my-org-staging-logs"
+  location = "US"
+}
+```
+
+`tfperms` reports a single set of `storage.buckets.*` permissions for the
+two buckets above. Grant the resulting custom role to the Terraform
+service account in **both** `my-org-prod` and `my-org-staging`. The tool
+does not tell you which project a permission needs to be granted in;
+that mapping comes from your provider-alias-to-project mapping in the
+config itself.
+
+## Comparison to alternatives
+
+| Tool | What it does | Why it is not `tfperms` |
+|------|--------------|-------------------------|
+| [`iamlive`](https://github.com/iann0036/iamlive) | Captures live AWS API calls and synthesises an IAM policy from the trace. | AWS-only and runtime-only; does not analyse a Terraform config. |
+| [`gcloud asset analyze-iam-policy`](https://cloud.google.com/policy-intelligence/docs/analyze-iam-policy) | Analyses IAM policies that already exist in a GCP project. | Tells you what permissions a principal **has**, not what a Terraform config will **need**. |
+| [`tfsec`](https://github.com/aquasecurity/tfsec) / [`checkov`](https://www.checkov.io/) | Static analysis for policy violations and security misconfigurations in Terraform. | Lints the configuration; does not infer the IAM permissions required to apply it. |
+| Google's "minimum permissions for Terraform" docs | Hand-curated permission lists for some `google_*` resources. | Partial coverage, manually maintained, often stale relative to the provider. |
+
+## Non-goals
+
+These are explicitly out of scope for v1, transcribed from the
+[product requirements doc](docs/tfperms_pdr.md):
+
+- Multi-cloud support. v1 is GCP-only; AWS and Azure are explicitly out of scope.
+- Runtime permission validation against a live project.
+- CI gate or policy enforcement engine. Sentinel and OPA exist for that.
+- Terraform plugin or provider integration. tfperms is a standalone CLI.
+- Consumption of `terraform plan` JSON output. v1 reads HCL directly.
+- Full HCL expression evaluation — function calls, dynamic blocks, complex interpolations, or anything requiring a `terraform` runtime. Literal values, `variable` defaults, and `locals` blocks with literal RHS may be resolved when doing so meaningfully reduces noise; everything else is reported as unresolved.
+- Resolution of remote, registry, or git-sourced modules.
+- Resolution of `terraform_remote_state` data sources. These read another state file (locally or via a backend) and produce values the current config consumes; v1 treats them like remote modules — warn and skip.
+- Reading, storing, or surfacing the values of attributes from variables marked `sensitive` or attributes documented as sensitive by the provider. Permission inference operates on attribute *presence and type*, not value content.
+- Recommendation of predefined GCP roles. Role recommendation is an optimization problem with no single right answer — ~600 predefined roles, varying org-policy restrictions on which roles can be granted, and team-specific grant strategies. v1 outputs raw permissions and trusts the user to make the trade-off; users should not assume a v2 will solve this and should not design around that assumption.
+
+## Catalog coverage
+
+v1 ships an embedded catalog covering roughly 30–50 of the most commonly
+used `google_*` resource types, partitioned by service family in
+`catalog/*.yaml`. Inspect coverage with:
+
+```sh
+tfperms catalog stats
+```
+
+When `tfperms` encounters a resource that is not in the catalog it lists
+it under "Unknown resources" with file and line context — never silently
+omitted. Treat that section as the contribution invitation: scaffold a
+new entry with `tfperms catalog scaffold <terraform_type>` and follow
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the verification and provenance
+requirements.
 
 ## Contributing
 
-Most contributions add or refine entries in `catalog/*.yaml`. The
-authoritative guide for those changes — schema reference, verification
-tiers, the worked example, and the PR checklist — is in
-[`CONTRIBUTING.md`](./CONTRIBUTING.md). Read it before opening a
-catalog PR; the validator and review will reject entries that skip the
-provenance and tier rules documented there.
-
-Code-level contributions (parser, CLI, catalog tooling) follow the
-conventions visible in the existing tests under `internal/`. Run
+Most contributions land in `catalog/*.yaml`. The schema, the two
+verification tiers (empirical for high-traffic resources, docs+source for
+the rest), the worked example, and the PR checklist all live in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Code-level contributions follow
+the conventions visible in the existing tests under `internal/`. Run
 `make test lint catalog-validate` before opening a PR.
 
 ## License
 
-See [`LICENSE`](./LICENSE).
+`tfperms` is released under the [Apache License 2.0](LICENSE).
