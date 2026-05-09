@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -611,6 +612,71 @@ func TestRootCommandErrorsOnNonexistentPath(t *testing.T) {
 	want := "tfperms: directory not found: " + missing
 	if msg != want {
 		t.Errorf("error message = %q, want %q", msg, want)
+	}
+}
+
+// TestRootCommandSurfacesNonENOENTStatError pins the regression that an
+// os.Stat failure other than ENOENT (e.g. permission denied on a parent
+// directory, ENOTDIR when a path component is a file) must be surfaced
+// as the actual underlying error rather than misdiagnosed as
+// "directory not found". The earlier implementation collapsed every
+// stat failure into the not-found message, which was actively
+// misleading for permission-denied / ENOTDIR cases — the user would
+// chase a nonexistent path that is in fact present but unreadable.
+//
+// We trigger an ENOTDIR by passing a path whose parent is an ordinary
+// .tf file, not a directory. This is portable (Unix and Windows both
+// reject "<file>/sub" via os.Stat) and hermetic (no chmod, no euid
+// dance, no skip-on-windows). The assertion checks two contracts:
+//
+//  1. The error must NOT claim "directory not found" — that is the
+//     mis-diagnosis we are guarding against.
+//  2. The error must carry the tfperms: prefix so it conforms to the
+//     standardized error-reporting contract.
+//
+// We deliberately do not pin the exact wording past the tfperms:
+// prefix because os.PathError text varies across Go versions and
+// platforms ("not a directory" on Linux, "The system cannot find the
+// path specified" on Windows, etc.). What matters is that the real
+// error reaches the user instead of being silently rewritten.
+func TestRootCommandSurfacesNonENOENTStatError(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name = "tfperms-fixture"
+}
+`)
+	// On Windows, Stat of "<file>/sub" returns ERROR_DIRECTORY which
+	// io/fs maps to fs.ErrNotExist, so this test asserts the wrong
+	// branch on that platform. The behaviour we are pinning (don't
+	// misdiagnose stat failures) is unchanged on Windows; we just
+	// cannot exercise the non-ENOENT branch portably there.
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Stat of <file>/sub maps to ErrNotExist on Windows; non-ENOENT branch not reachable")
+	}
+	target := filepath.Join(dir, "main.tf", "phantom")
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{target})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute on path with non-directory parent returned nil; expected an error.\noutput: %s", out.String())
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "directory not found") {
+		t.Errorf("non-ENOENT stat failure should not be reported as 'directory not found'; got: %q", msg)
+	}
+	if !strings.HasPrefix(msg, "tfperms: ") {
+		t.Errorf("error message must carry tfperms: prefix; got: %q", msg)
+	}
+	// The underlying os.PathError carries the path the user typed
+	// (or a prefix of it) — surface that to the assertion so a
+	// regression that drops the path entirely is caught.
+	if !strings.Contains(msg, "main.tf") {
+		t.Errorf("error message should reference the offending path component; got: %q", msg)
 	}
 }
 

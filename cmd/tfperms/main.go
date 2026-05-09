@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -230,10 +232,25 @@ func newRootCmd() *cobra.Command {
 			// pointer to the containing directory — a common new-user
 			// mistake (`tfperms main.tf`) for which the abstract
 			// "must be a directory" message is unhelpful.
+			//
+			// os.Stat can fail for reasons other than "not found"
+			// (permission denied, ENOTDIR for a path component that
+			// is a file, broken symlink loop, etc.). Reporting every
+			// stat failure as "directory not found" misdiagnoses the
+			// real problem — "tfperms: directory not found: /etc/p/q"
+			// is actively misleading when the failure is "permission
+			// denied on /etc/p". errors.Is(..., fs.ErrNotExist) is
+			// the canonical Go check for the ENOENT-equivalent case;
+			// everything else surfaces the underlying os.PathError
+			// (already a single-line "stat <path>: <op error>") with
+			// the tfperms: prefix prepended via %w.
 			path := args[0]
 			info, err := os.Stat(path)
 			if err != nil {
-				return fmt.Errorf("tfperms: directory not found: %s", path)
+				if errors.Is(err, fs.ErrNotExist) {
+					return fmt.Errorf("tfperms: directory not found: %s", path)
+				}
+				return fmt.Errorf("tfperms: %w", err)
 			}
 			if !info.IsDir() {
 				return fmt.Errorf("tfperms: expected a directory, got a file: %s\n  (run 'tfperms <directory>' instead)", path)
