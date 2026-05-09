@@ -150,6 +150,76 @@ func TestRenderJSONDeterministic(t *testing.T) {
 	}
 }
 
+// TestRenderJSONEmptyDiagnostics pins the JSON v1.0 stability contract
+// for empty top-level slices: when Result has nil (or empty) Unknowns,
+// Unresolved, and Diagnostics fields, the rendered JSON MUST surface
+// each key with an empty array `[]`, never `null` and never absent.
+//
+// Programmatic consumers (CI gates, dashboards) iterate over these
+// arrays unconditionally; a `null` would force every consumer to
+// special-case it, and an absent key would silently change shape under
+// the v1.0 schema. Canonicalize is the single source of truth for the
+// non-nil empty-slice invariant — every formatter calls it on entry,
+// so a regression that drops Canonicalize from RenderJSON or that
+// changes Canonicalize to return nil empties would fail this test
+// rather than produce schema-breaking output downstream.
+//
+// Asserting on the raw JSON bytes (rather than just unmarshaling and
+// checking len == 0) is deliberate: an unmarshal of `null` into a
+// []T also yields a length-zero slice, so a structural-only assertion
+// would not catch the regression. The literal `"unknowns": []` substring
+// pins the on-the-wire shape.
+func TestRenderJSONEmptyDiagnostics(t *testing.T) {
+	// All diagnostic fields nil — the "clean run" shape resolver.Resolve
+	// returns when no unknowns or unresolved conditionals were seen.
+	res := resolver.Result{
+		PlanPerms:       []string{"storage.buckets.get"},
+		ApplyOnlyPerms:  []string{"storage.buckets.create"},
+		TotalApplyPerms: []string{"storage.buckets.create", "storage.buckets.get"},
+	}
+
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, res, 1, "1.2.3"); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+
+	got := buf.String()
+
+	// Each diagnostic key must appear with an empty array literal. The
+	// indented form (`": []`) matches the encoder.SetIndent("", "  ")
+	// configuration; a regression that flips to `: null` or omits the
+	// key entirely fails this substring check.
+	wantSubstrings := []string{
+		`"diagnostics": []`,
+		`"unknowns": []`,
+		`"unresolved_conditionals": []`,
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q — empty diagnostic slice rendered as null or omitted.\noutput:\n%s",
+				want, got)
+		}
+	}
+
+	// Defence in depth: parse the JSON back and confirm the slices are
+	// non-nil. A `null` literal unmarshals to a nil []T, so this catches
+	// any regression that the substring check might miss (e.g. a future
+	// schema change that re-keys the field).
+	var parsed jsonOutput
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if parsed.Diagnostics == nil {
+		t.Errorf("Diagnostics unmarshaled to nil; expected non-nil empty slice")
+	}
+	if parsed.Unknowns == nil {
+		t.Errorf("Unknowns unmarshaled to nil; expected non-nil empty slice")
+	}
+	if parsed.UnresolvedConditionals == nil {
+		t.Errorf("UnresolvedConditionals unmarshaled to nil; expected non-nil empty slice")
+	}
+}
+
 // TestRenderJSONWriterError confirms that a failing io.Writer surfaces as
 // a wrapped error from RenderJSON. The errWriter adapter latches the
 // underlying error and the trailing check returns it wrapped with the
