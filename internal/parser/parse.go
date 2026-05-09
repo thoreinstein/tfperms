@@ -826,8 +826,8 @@ func moduleLoadWarning(m ModuleCall, err error) *hcl.Diagnostic {
 	}
 }
 
-// formatDiag flattens HCL diagnostics into a single-line
-// "<file>:<line>: <summary>" error.
+// formatDiag flattens HCL diagnostics into a single-line error prefixed
+// with "tfperms: ", of the form "tfperms: <file>:<line>: <summary>".
 //
 // Only the first error-severity diagnostic is reported; warning-severity
 // diagnostics are skipped because they would never be the cause of a
@@ -838,7 +838,7 @@ func moduleLoadWarning(m ModuleCall, err error) *hcl.Diagnostic {
 // Summary is used in preference to Detail because Summary is one-line by
 // convention while Detail commonly contains multiple lines including code
 // snippets — those would violate the single-line error contract that the
-// CLI reporter and tests assert.
+// CLI reporter and tests in parse_test.go assert.
 func formatDiag(diags hcl.Diagnostics) error {
 	for _, d := range diags {
 		if d.Severity != hcl.DiagError {
