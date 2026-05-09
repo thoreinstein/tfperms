@@ -110,8 +110,9 @@ var roleNameRE = regexp.MustCompile(`^[a-zA-Z0-9_]{3,64}$`)
 //     time so the help text stays consistent with the implemented
 //     surface.
 //   - The positional argument must point at a directory; passing a
-//     file produces a single-line error pointing the user at the
-//     containing directory.
+//     file produces a multi-line, "tfperms:"-prefixed error: a primary
+//     line "tfperms: expected a directory, got a file: <path>" followed
+//     by an indented hint line "(run 'tfperms <directory>' instead)".
 //   - Pipeline: parser.LoadRecursive(dir) → catalog.Load() →
 //     resolver.Resolve(...) → reporter.Render(stdout, ...).
 //
