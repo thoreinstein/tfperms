@@ -684,7 +684,9 @@ resource "google_storage_bucket" "primary" {
 // An unexpected panic anywhere in the pipeline (parser, catalog,
 // resolver, reporter, or a future caller) must surface as a single-
 // line `tfperms: internal error (panic): <value>` on stderr and exit
-// non-zero — not as a Go stack trace dumped at a Terraform operator.
+// with code 2 (execution error) — not as a Go stack trace dumped at a
+// Terraform operator and not as code 1 (which is reserved for usage
+// errors per the documented exit-code contract).
 //
 // We drive run() directly with an inline cobra command whose RunE
 // panics, rather than waiting for some real code path to panic. This
@@ -694,7 +696,9 @@ resource "google_storage_bucket" "primary" {
 //
 // The exit code assertion is just as important as the message: a
 // recovered panic that exited 0 would let CI consumers treat a crashed
-// tfperms run as a successful "no permissions found" result.
+// tfperms run as a successful "no permissions found" result, and a
+// recovered panic that exited 1 would conflate a tfperms internal bug
+// with a user-fixable usage error.
 func TestRunRecoversFromPanic(t *testing.T) {
 	cmd := &cobra.Command{
 		Use:           "panicker",
@@ -711,8 +715,8 @@ func TestRunRecoversFromPanic(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	code := run(cmd, stderr)
 
-	if code != 1 {
-		t.Errorf("run() exit code = %d, want 1", code)
+	if code != 2 {
+		t.Errorf("run() exit code = %d, want 2", code)
 	}
 	want := "tfperms: internal error (panic): boom\n"
 	if got := stderr.String(); got != want {
