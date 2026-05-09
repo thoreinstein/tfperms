@@ -147,7 +147,11 @@ func runResourceFixture(t *testing.T, cat *catalog.Catalog, service, resourceTyp
 		t.Fatalf("parser.LoadRecursive %s: %v", scenarioDir, err)
 	}
 
-	res := resolver.Resolve(resources, cat, resolver.ResolveOptions{IncludeDelete: true})
+	// ResolveOptions{} (zero value) preserves Delete permissions —
+	// the harness goldens were captured before --exclude-delete
+	// existed, so they pin the include-delete contract that every
+	// catalog regression test must hold.
+	res := resolver.Resolve(resources, cat, resolver.ResolveOptions{})
 	relativizeResultPaths(&res, absDir)
 
 	got, err := json.MarshalIndent(res, "", "  ")

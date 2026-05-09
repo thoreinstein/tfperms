@@ -50,13 +50,14 @@
 //     DataSources, nor IAMBindings surface as UnknownResource entries
 //     carrying the Terraform Type and the source File:Line.
 //
-// Apply-stage Delete inclusion is controlled by ResolveOptions.IncludeDelete.
+// Apply-stage Delete inclusion is controlled by ResolveOptions.ExcludeDelete.
 // Callers wanting the strictly-smaller "next apply assuming no destroys"
-// permission set pass IncludeDelete: false; the default for the CLI is
-// true (the trade-off documented in --help). prevent_destroy on a
-// resource still suppresses Delete independently — the two filters AND
-// together so a prevent_destroy resource never contributes Delete
-// regardless of IncludeDelete.
+// permission set pass ExcludeDelete: true; the zero-value (and the CLI
+// default) is false, meaning Delete permissions flow through (the
+// trade-off documented in --help). prevent_destroy on a resource still
+// suppresses Delete independently — the two filters OR together so a
+// prevent_destroy resource never contributes Delete regardless of
+// ExcludeDelete.
 //
 // When the catalog or resolver behaviour changes, the per-resource catalog
 // goldens at internal/catalog/testdata/<service>/<type>/expected.json
@@ -292,20 +293,28 @@ type AppliedConditional struct {
 
 // ResolveOptions controls optional knobs on the resolver pipeline.
 //
-// IncludeDelete governs whether each catalog entry's Delete permissions
-// flow into the apply-stage sets (ApplyOnlyPerms, TotalApplyPerms, and
-// each ResourceResult's BaseApplyOnly / AppliedConditional.ApplyOnly).
-// The CLI defaults to true — the include-delete trade-off documented in
-// --help: include = sufficient for any apply (the safe default);
-// exclude = strictly smaller, valid for the next apply only when
-// terraform will not destroy. prevent_destroy on a resource is an
-// independent filter that ANDs with IncludeDelete: a prevent_destroy
-// resource never contributes Delete permissions regardless of this flag.
+// ExcludeDelete governs whether each catalog entry's Delete permissions
+// are suppressed from the apply-stage sets (ApplyOnlyPerms,
+// TotalApplyPerms, and each ResourceResult's BaseApplyOnly /
+// AppliedConditional.ApplyOnly). The field is named in the negative
+// (Exclude rather than Include) so the struct's zero value is the safe
+// default: ResolveOptions{} preserves Delete permissions, matching the
+// CLI default and the legacy pre-flag behaviour. A caller passing
+// ResolveOptions{ExcludeDelete: true} opts into the strictly-smaller
+// "next apply assuming no destroys" set documented in --help:
+//
+//	default (include) — sufficient for any apply, including ones that destroy.
+//	ExcludeDelete: true — strictly smaller; will fail if terraform actually destroys.
+//
+// prevent_destroy on a resource is an independent filter that ORs with
+// ExcludeDelete: a prevent_destroy resource never contributes Delete
+// permissions regardless of this flag, and ExcludeDelete suppresses
+// Delete regardless of prevent_destroy.
 //
 // The struct exists (rather than a bare bool) so adding future knobs is
 // a backward-compatible field addition rather than a signature change.
 type ResolveOptions struct {
-	IncludeDelete bool
+	ExcludeDelete bool
 }
 
 // Resolve combines the parsed resource set with the merged catalog and
@@ -318,8 +327,9 @@ type ResolveOptions struct {
 // production callers should always pass a catalog produced by
 // catalog.Load.
 //
-// opts.IncludeDelete suppresses the Delete contribution to apply-stage
-// sets when false. See ResolveOptions for the trade-off.
+// opts.ExcludeDelete suppresses the Delete contribution to apply-stage
+// sets when true; the zero value preserves Delete (the safe CLI
+// default). See ResolveOptions for the trade-off.
 //
 // Resolve is pure — it does not mutate either input. The returned slices
 // are freshly allocated so a caller can sort or filter them in place
@@ -351,7 +361,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog, opts ResolveOpti
 			}] = cloneModulePath(r.ModulePath)
 			continue
 		}
-		applyPermissionSet(plan, apply, entry.base, r.PreventDestroy, opts.IncludeDelete)
+		applyPermissionSet(plan, apply, entry.base, r.PreventDestroy, opts.ExcludeDelete)
 
 		// Per-resource attribution: capture the catalog contribution
 		// of this resource so the by-resource reporter format
@@ -366,7 +376,7 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog, opts ResolveOpti
 		// as an empty (non-nil) slice so a resource with no firing
 		// conditionals still marshals as `[]` in JSON, matching the
 		// field-invariants contract for top-level slices.
-		basePlan, baseApplyOnly := splitPermStrings(entry.base, r.PreventDestroy, opts.IncludeDelete)
+		basePlan, baseApplyOnly := splitPermStrings(entry.base, r.PreventDestroy, opts.ExcludeDelete)
 		rr := ResourceResult{
 			Type:          r.Type,
 			Name:          r.Name,
@@ -381,8 +391,8 @@ func Resolve(resources []parser.Resource, cat *catalog.Catalog, opts ResolveOpti
 		for _, cond := range entry.conditionals {
 			matched, missing := matchesConditional(r.Attrs, cond.when)
 			if matched {
-				applyPermissionSet(plan, apply, cond.permissions, r.PreventDestroy, opts.IncludeDelete)
-				condPlan, condApplyOnly := splitPermStrings(cond.permissions, r.PreventDestroy, opts.IncludeDelete)
+				applyPermissionSet(plan, apply, cond.permissions, r.PreventDestroy, opts.ExcludeDelete)
+				condPlan, condApplyOnly := splitPermStrings(cond.permissions, r.PreventDestroy, opts.ExcludeDelete)
 				rr.Applied = append(rr.Applied, AppliedConditional{
 					When:      cloneWhen(cond.when),
 					Plan:      condPlan,
@@ -544,22 +554,25 @@ func projectDataSourceConditionals(conds []catalog.DataSourceConditional) []reso
 // applyPermissionSet unions perms into the running plan/apply sets per
 // the Epic 5 stage rules: Plan goes to the plan map; Create / Update
 // always go to the apply map; Delete is suppressed when preventDestroy
-// is set OR when includeDelete is false. Centralising the four addAll
+// is set OR when excludeDelete is true. Centralising the four addAll
 // calls keeps base-permission and conditional-permission application
 // in lockstep — a future stage addition has exactly one place to
 // update.
 //
-// The two Delete-suppression conditions AND together: a user passing
-// --exclude-delete (includeDelete=false) and a resource carrying
+// The two Delete-suppression conditions OR together: a user passing
+// --exclude-delete (excludeDelete=true) and a resource carrying
 // prevent_destroy = true both suppress Delete; either alone is
 // sufficient. They are independent gates intentionally — a CLI-level
 // "I never destroy" assertion does not change the per-resource
-// prevent_destroy semantics, and vice versa.
-func applyPermissionSet(plan, apply map[string]struct{}, perms catalog.PermissionSet, preventDestroy, includeDelete bool) {
+// prevent_destroy semantics, and vice versa. excludeDelete is named in
+// the negative deliberately: the zero value (false) preserves Delete,
+// matching the safe CLI default and ensuring a programmatic caller
+// passing ResolveOptions{} does not silently shrink the apply set.
+func applyPermissionSet(plan, apply map[string]struct{}, perms catalog.PermissionSet, preventDestroy, excludeDelete bool) {
 	addAll(plan, perms.Plan)
 	addAll(apply, perms.Create)
 	addAll(apply, perms.Update)
-	if !preventDestroy && includeDelete {
+	if !preventDestroy && !excludeDelete {
 		addAll(apply, perms.Delete)
 	}
 }
@@ -685,7 +698,7 @@ func cloneModulePath(path []string) []string {
 //   - planPerms is the sorted, deduplicated copy of perms.Plan.
 //   - applyOnlyPerms is `(Create ∪ Update ∪ Delete) \ Plan`, with the
 //     Delete slice suppressed when preventDestroy is true OR when
-//     includeDelete is false. The two suppression gates AND together —
+//     excludeDelete is true. The two suppression gates OR together —
 //     see applyPermissionSet for the invariant.
 //
 // A `.get` permission listed under both Plan and Update on a single
@@ -695,14 +708,14 @@ func cloneModulePath(path []string) []string {
 // on which stage a permission "belongs" to. Both return values are
 // non-nil empty slices when their respective stage contributes
 // nothing, so JSON marshals as `[]` rather than `null`.
-func splitPermStrings(perms catalog.PermissionSet, preventDestroy, includeDelete bool) (planPerms, applyOnlyPerms []string) {
+func splitPermStrings(perms catalog.PermissionSet, preventDestroy, excludeDelete bool) (planPerms, applyOnlyPerms []string) {
 	planSet := make(map[string]struct{})
 	addAll(planSet, perms.Plan)
 
 	applySet := make(map[string]struct{})
 	addAll(applySet, perms.Create)
 	addAll(applySet, perms.Update)
-	if !preventDestroy && includeDelete {
+	if !preventDestroy && !excludeDelete {
 		addAll(applySet, perms.Delete)
 	}
 
