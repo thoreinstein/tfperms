@@ -186,16 +186,19 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			format = effective
-			// --exclude-delete is sugar for --include-delete=false.
-			// When the user explicitly passed it, it overrides the
-			// include-delete value. We deliberately do not error on
-			// "both flags set with conflicting values" — the
-			// later-precedence rule keeps the surface predictable
-			// (matches resolveFormat's permissive shape) without
-			// requiring the user to know the canonical-vs-alias
-			// distinction.
-			if cmd.Flags().Changed("exclude-delete") {
-				includeDelete = !excludeDelete
+			// --exclude-delete is sugar for --include-delete=false,
+			// so it only overrides when the user actually asked to
+			// exclude (the truthy form). An explicit
+			// --exclude-delete=false matches the default and must NOT
+			// flip --include-delete back on: a command like
+			// `--include-delete=false --exclude-delete=false` clearly
+			// asks for Delete permissions to be suppressed via the
+			// canonical flag, and treating `--exclude-delete=false` as
+			// an override would silently re-enable them. We therefore
+			// gate the override on excludeDelete itself rather than on
+			// "was the flag changed at all".
+			if excludeDelete {
+				includeDelete = false
 			}
 			return nil
 		},
@@ -241,7 +244,7 @@ func newRootCmd() *cobra.Command {
 	// declared so users discovering the flag via `tfperms --help` see
 	// either name; PreRunE reconciles the two if both are set.
 	cmd.Flags().BoolVar(&includeDelete, "include-delete", true, includeDeleteFlagHelp)
-	cmd.Flags().BoolVar(&excludeDelete, "exclude-delete", false, "shorthand for --include-delete=false; suppress catalog Delete permissions from the apply set (overrides --include-delete when both are set)")
+	cmd.Flags().BoolVar(&excludeDelete, "exclude-delete", false, "shorthand for --include-delete=false; suppress catalog Delete permissions from the apply set (truthy form overrides --include-delete; --exclude-delete=false is a no-op and never re-enables Delete)")
 	cmd.AddCommand(newCatalogCmd())
 	return cmd
 }
