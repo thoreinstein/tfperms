@@ -31,14 +31,12 @@ resource type lands. `tfperms` makes that one command.
 ```sh
 # Go install (any platform with Go 1.24+).
 go install github.com/thoreinstein/tfperms/cmd/tfperms@latest
-
-# Homebrew (macOS / Linux).
-brew install thoreinstein/tap/tfperms
 ```
 
-For pinned binaries, download the release artifact for your platform from
-[the GitHub releases page](https://github.com/thoreinstein/tfperms/releases)
-and put the extracted `tfperms` binary on your `PATH`.
+Homebrew tap and pre-built release binaries (Linux / macOS / Windows on
+amd64 + arm64) are scaffolded in `.goreleaser.yaml` but not yet
+published; those install paths land with the first tagged release.
+Until then `go install` from source is the supported path.
 
 ## Usage
 
