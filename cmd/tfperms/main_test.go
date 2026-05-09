@@ -294,23 +294,23 @@ module "remote" {
 	}
 }
 
-// TestRootCommandZeroArgsDefaultsToCwd exercises the bare-`tfperms`
-// invocation path: when no positional argument is supplied, the root
-// command falls through to rootDefaultDir ("."), which the parser
-// resolves against the process's current working directory. The wiring
-// test in TestRootCommandRunsPipeline only proves the explicit-path
-// branch; this test pins the no-arg branch by chdir'ing into a fixture
-// directory and executing the root command with an empty args slice.
-func TestRootCommandZeroArgsDefaultsToCwd(t *testing.T) {
-	dir := writeFixture(t, `
-resource "google_storage_bucket" "primary" {
-  name                        = "tfperms-fixture"
-  location                    = "US"
-  uniform_bucket_level_access = false
-}
-`)
-	t.Chdir(dir)
-
+// TestRootCommandHelpOnNoArgs pins the Epic 7 / tfperms-a6t.1 contract
+// that `tfperms` invoked with no positional argument prints the
+// long-form help (the rootLongDescription advisory framing plus v1
+// caveats) and exits 0. The previous behaviour silently defaulted to
+// "use cwd"; that hid the advisory framing from new users running
+// tfperms for the first time, which is exactly the audience that
+// most needs to read the v1 limitations before trusting the output.
+//
+// We assert on a few stable substrings of rootLongDescription rather
+// than byte-pinning the entire help block — cobra owns the surrounding
+// flag-listing format, and pinning that would break on a cobra
+// upgrade for no semantic reason. The substrings cover the three
+// distinguishing parts of the long description: the opening sentence,
+// the "Output is advisory" framing line, and the v1-limitations
+// header. A regression that swapped Long for the old short string
+// would fail every assertion.
+func TestRootCommandHelpOnNoArgs(t *testing.T) {
 	root := newRootCmd()
 	out := &bytes.Buffer{}
 	root.SetOut(out)
@@ -323,15 +323,145 @@ resource "google_storage_bucket" "primary" {
 
 	got := out.String()
 
-	summary, _, ok := strings.Cut(got, "\n")
-	if !ok {
-		t.Fatalf("output has no summary line; got:\n%s", got)
+	wantSubstrings := []string{
+		"tfperms statically analyzes a Terraform Google Cloud Platform configuration",
+		"Output is advisory.",
+		"v1 limitations:",
 	}
-	if !strings.Contains(summary, "for 1 resource") {
-		t.Errorf("summary line missing %q; got: %q", "for 1 resource", summary)
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("help output missing %q.\noutput:\n%s", want, got)
+		}
 	}
-	if !strings.Contains(got, "  storage.buckets.") {
-		t.Errorf("output missing any storage.buckets.* permission row.\noutput:\n%s", got)
+	// And ensure we did NOT silently run the analysis pipeline (no
+	// summary line). A regression that fell through to runAnalyze
+	// against an empty cwd would still print "0 permissions for 0
+	// resources, ..." after the help block — assert on the absence
+	// of the leading "permissions for" phrase to catch that.
+	if strings.Contains(got, "permissions for ") {
+		t.Errorf("help-on-no-args unexpectedly produced a pipeline summary line:\n%s", got)
+	}
+}
+
+// TestRootCommandErrorsOnFile pins that a positional argument naming
+// a file (rather than a directory) is rejected with a message that
+// names the offending path verbatim and points at the containing
+// directory. This is the most common new-user mistake (`tfperms
+// main.tf`); a generic "must be a directory" error is unhelpful when
+// the user has the right file in the wrong shape.
+//
+// The error message uses the user-supplied path (not the absolutized
+// form) so the message echoes what the user typed. Pinning the
+// exact phrasing would couple this test to wording details — instead
+// we assert the path appears verbatim and the directory-pointer
+// suggestion is present.
+func TestRootCommandErrorsOnFile(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name = "tfperms-fixture"
+}
+`)
+	filePath := filepath.Join(dir, "main.tf")
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{filePath})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute on file path returned nil; expected an error.\noutput: %s", out.String())
+	}
+	msg := err.Error()
+	// The error must echo the file path the user typed so they can
+	// identify what tfperms rejected.
+	if !strings.Contains(msg, filePath) {
+		t.Errorf("error message missing offending file path %q; got: %q", filePath, msg)
+	}
+	// And it must point the user at the containing directory — that
+	// is what makes the message actionable rather than abstract.
+	if !strings.Contains(msg, "is a file") {
+		t.Errorf("error message missing 'is a file' phrasing; got: %q", msg)
+	}
+	if !strings.Contains(msg, dir) {
+		t.Errorf("error message missing containing directory %q; got: %q", dir, msg)
+	}
+}
+
+// TestRootCommandExcludeDelete pins the --exclude-delete flag's CLI
+// surface end-to-end: parser → catalog → resolver → reporter pipeline
+// runs with IncludeDelete: false, and the rendered flat output must
+// not include `storage.buckets.delete` (which the storage catalog
+// entry contributes only to its Delete stage). The companion
+// resolver-level test pins the IncludeDelete branch on Resolve;
+// this test pins the CLI wiring that gets us there from the
+// --exclude-delete flag.
+func TestRootCommandExcludeDelete(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--exclude-delete", dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	// storage.buckets.delete is the canonical Delete contribution
+	// from the storage catalog entry; with --exclude-delete it must
+	// be absent from the rendered output.
+	if strings.Contains(got, "storage.buckets.delete") {
+		t.Errorf("--exclude-delete should suppress storage.buckets.delete from output; got:\n%s", got)
+	}
+	// Sanity-check that the rest of the pipeline still ran: the
+	// `.create` permission belongs to the apply set independently of
+	// Delete and must still appear. A regression that broadly broke
+	// the apply-stage pipeline would suppress both, masking the
+	// real failure mode of suppressing only Delete.
+	if !strings.Contains(got, "storage.buckets.create") {
+		t.Errorf("--exclude-delete should not suppress storage.buckets.create; got:\n%s", got)
+	}
+}
+
+// TestRootCommandIncludeDeleteDefault is the positive companion to
+// TestRootCommandExcludeDelete: with the flag absent, Delete must
+// appear in the output (the safe default per Epic 7). Pinning both
+// branches together prevents a regression where the default flipped
+// to false silently.
+func TestRootCommandIncludeDeleteDefault(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v\noutput: %s", err, out.String())
+	}
+
+	got := out.String()
+
+	if !strings.Contains(got, "storage.buckets.delete") {
+		t.Errorf("default --include-delete=true should include storage.buckets.delete; got:\n%s", got)
 	}
 }
 
