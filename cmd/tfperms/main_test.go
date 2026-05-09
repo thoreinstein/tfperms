@@ -391,10 +391,10 @@ resource "google_storage_bucket" "primary" {
 
 // TestRootCommandExcludeDelete pins the --exclude-delete flag's CLI
 // surface end-to-end: parser → catalog → resolver → reporter pipeline
-// runs with IncludeDelete: false, and the rendered flat output must
+// runs with ExcludeDelete: true, and the rendered flat output must
 // not include `storage.buckets.delete` (which the storage catalog
 // entry contributes only to its Delete stage). The companion
-// resolver-level test pins the IncludeDelete branch on Resolve;
+// resolver-level test pins the ExcludeDelete branch on Resolve;
 // this test pins the CLI wiring that gets us there from the
 // --exclude-delete flag.
 func TestRootCommandExcludeDelete(t *testing.T) {
@@ -479,7 +479,7 @@ resource "google_storage_bucket" "primary" {
 // expected to appear in the rendered flat output. storage_bucket is the
 // shared fixture's catalogued resource and the only catalog entry
 // contributing storage.buckets.delete (a pure Delete-stage permission),
-// so its presence is a direct proxy for IncludeDelete.
+// so its presence is a direct proxy for the include-delete CLI default.
 //
 // Cases include:
 //   - explicit boolean forms for each flag in isolation,

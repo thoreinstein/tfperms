@@ -382,11 +382,17 @@ func validateFormatFlags(format, roleName string) error {
 // the `unknowns` / `unresolved` arrays under --quiet would break
 // integration consumers that always expect those keys to be present.
 //
-// includeDelete maps onto resolver.ResolveOptions.IncludeDelete: true
-// includes catalog Delete permissions in the apply-stage sets (the
-// safe default), false suppresses them. PreRunE reconciles the
-// --include-delete / --exclude-delete pair before the value reaches
-// here, so runAnalyze sees a single, already-decided boolean.
+// includeDelete maps onto resolver.ResolveOptions.ExcludeDelete with
+// inverted polarity: true (the CLI default) leaves ExcludeDelete at its
+// zero value so catalog Delete permissions flow through to the apply
+// set; false sets ExcludeDelete: true to suppress them. The CLI
+// surface keeps the positive --include-delete framing because that
+// matches the safe default users expect, while the resolver API is
+// intentionally negative so a programmatic caller passing
+// ResolveOptions{} does not silently shrink the apply set. PreRunE
+// reconciles the --include-delete / --exclude-delete pair before the
+// value reaches here, so runAnalyze sees a single, already-decided
+// boolean.
 func runAnalyze(w io.Writer, dir, format, roleName string, quiet, includeDelete bool) error {
 	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
@@ -396,7 +402,7 @@ func runAnalyze(w io.Writer, dir, format, roleName string, quiet, includeDelete 
 	if err != nil {
 		return fmt.Errorf("load catalog: %w", err)
 	}
-	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{IncludeDelete: includeDelete})
+	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{ExcludeDelete: !includeDelete})
 	result.Diagnostics = relativizeDiags(diags, dir)
 	relativizeResult(&result, dir)
 	switch format {
