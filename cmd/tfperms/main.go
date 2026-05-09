@@ -233,10 +233,10 @@ func newRootCmd() *cobra.Command {
 			path := args[0]
 			info, err := os.Stat(path)
 			if err != nil {
-				return fmt.Errorf("path %q: %w", path, err)
+				return fmt.Errorf("tfperms: directory not found: %s", path)
 			}
 			if !info.IsDir() {
-				return fmt.Errorf("path %q is a file; tfperms analyzes directories — pass %q instead", path, filepath.Dir(path))
+				return fmt.Errorf("tfperms: expected a directory, got a file: %s\n  (run 'tfperms <directory>' instead)", path)
 			}
 			return runAnalyze(cmd.OutOrStdout(), path, format, roleName, quiet, includeDelete)
 		},
@@ -306,7 +306,7 @@ func resolveFormat(format string, formatExplicit, byResource bool) (string, erro
 		// Both flags set, both agree — permit and proceed.
 		return formatByResource, nil
 	}
-	return "", fmt.Errorf("--by-resource conflicts with --format=%s; pass either --by-resource or --format=by-resource, not both", format)
+	return "", fmt.Errorf("tfperms: --by-resource conflicts with --format=%s; pass either --by-resource or --format=by-resource, not both", format)
 }
 
 // validateFormatFlags rejects --format / --role-name combinations the
@@ -344,15 +344,14 @@ func validateFormatFlags(format, roleName string) error {
 	case formatFlat, formatByResource, formatRole, formatJSON:
 		// fine
 	default:
-		return fmt.Errorf("invalid --format %q: must be one of %q, %q, %q, or %q",
-			format, formatFlat, formatByResource, formatRole, formatJSON)
+		return fmt.Errorf("tfperms: invalid --format value %q (must be one of flat, by-resource, role, json)", format)
 	}
 	if format == formatRole {
 		if roleName == "" {
-			return fmt.Errorf("--format=%s requires --role-name", formatRole)
+			return fmt.Errorf("tfperms: --role-name is required when --format=role")
 		}
 		if !roleNameRE.MatchString(roleName) {
-			return fmt.Errorf("invalid --role-name %q: must match %s", roleName, roleNameRE.String())
+			return fmt.Errorf("tfperms: --role-name must match %s; got %q\n  (note: dashes are not allowed; use underscores)", roleNameRE.String(), roleName)
 		}
 	}
 	return nil
@@ -416,11 +415,11 @@ func validateFormatFlags(format, roleName string) error {
 func runAnalyze(w io.Writer, dir, format, roleName string, quiet, includeDelete bool) error {
 	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
-		return fmt.Errorf("load %q: %w", dir, err)
+		return err
 	}
 	cat, err := catalog.Load()
 	if err != nil {
-		return fmt.Errorf("load catalog: %w", err)
+		return fmt.Errorf("tfperms: catalog corrupt — please file an issue: %w", err)
 	}
 	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{ExcludeDelete: !includeDelete})
 	result.Diagnostics = relativizeDiags(diags, dir)
@@ -531,9 +530,68 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 	return out
 }
 
-func main() {
+// run is the testable entry point for the binary. It wraps
+// rootCmd.Execute() with a panic recovery boundary so an unexpected
+// panic anywhere in the pipeline (parser, catalog, resolver, reporter)
+// surfaces as a single-line `tfperms: internal error (panic): <message>`
+// on stderr rather than dumping a Go stack trace at the user. Stack
+// traces leak implementation details and are illegible to a CLI
+// operator who is debugging a Terraform configuration, not the
+// internals of tfperms.
+//
+// Returned int is the exit code so a test caller (TestRunPanicRecovery)
+// can drive the function without invoking os.Exit. Splitting run from
+// main is the standard Go pattern for this — main does I/O setup and
+// process exit, run does the work.
+//
+// Error reporting policy: every error that reaches stderr is prefixed
+// with `tfperms: ` exactly once. Errors built inside the codebase
+// already carry the prefix (validateFormatFlags, resolveFormat, the
+// path-validation branches in RunE, the parser/walker layers); errors
+// that originate elsewhere (cobra's own argument parsing, third-party
+// libraries) are prefixed here so the user sees one consistent shape
+// regardless of which layer rejected the input. The `if !strings.HasPrefix`
+// guard prevents the prefix from being doubled when the error already
+// carries it.
+func run(stderr io.Writer) (code int) {
+	defer func() {
+		if r := recover(); r != nil {
+			// A panic during Execute is by definition an internal bug,
+			// not user error. Render a single-line message that names
+			// the panic value (which may be an error, a string, or any
+			// arbitrary value) and exit non-zero. We deliberately do
+			// NOT print the stack trace — the user is a Terraform
+			// operator, not a tfperms developer, and the trace would
+			// bury the actionable summary. A developer reproducing the
+			// bug locally can re-run under `go run -gcflags=...` or
+			// rebuild without the recover for a full trace.
+			//
+			// `code` is a named return so the deferred recover can set
+			// the exit status without re-entering the normal return
+			// path (Go's deferred functions can mutate named returns).
+			fmt.Fprintf(stderr, "tfperms: internal error (panic): %v\n", r)
+			code = 1
+		}
+	}()
 	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		msg := err.Error()
+		// Prefix-once policy: errors constructed inside tfperms
+		// (validateFormatFlags, runAnalyze, parser, walker, ...)
+		// already carry the `tfperms: ` prefix because the message
+		// shape is part of their contract — those errors are surfaced
+		// verbatim. Errors that originate elsewhere (cobra's argument
+		// validation, an unwrapped third-party error) do not, and
+		// prefixing them here keeps the user-visible shape uniform
+		// across every error path.
+		if !strings.HasPrefix(msg, "tfperms: ") {
+			msg = "tfperms: " + msg
+		}
+		fmt.Fprintln(stderr, msg)
+		return 1
 	}
+	return 0
+}
+
+func main() {
+	os.Exit(run(os.Stderr))
 }

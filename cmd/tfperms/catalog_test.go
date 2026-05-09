@@ -102,7 +102,8 @@ func TestCatalogScaffoldMutuallyExclusiveFlags(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for conflicting flags, got nil")
 	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("err = %v, want it to mention 'mutually exclusive'", err)
+	want := "tfperms: --data-source and --iam-binding are mutually exclusive"
+	if got := err.Error(); got != want {
+		t.Errorf("err = %q, want %q", got, want)
 	}
 }

@@ -32,7 +32,7 @@ import (
 func FindTerraformFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read directory %q: %w", dir, err)
+		return nil, fmt.Errorf("tfperms: read directory %q: %w", dir, err)
 	}
 
 	var found []string
@@ -62,9 +62,9 @@ func FindTerraformFiles(dir string) ([]string, error) {
 		if absErr != nil {
 			// filepath.Abs only fails if os.Getwd fails; surface both so
 			// the user can diagnose the rare case it happens.
-			return nil, fmt.Errorf("no .tf files in %s (could not resolve absolute path: %v)", dir, absErr)
+			return nil, fmt.Errorf("tfperms: no .tf files found in %s (could not resolve absolute path: %v)", dir, absErr)
 		}
-		return nil, fmt.Errorf("no .tf files in %s", abs)
+		return nil, fmt.Errorf("tfperms: no .tf files found in %s", abs)
 	}
 	return found, nil
 }

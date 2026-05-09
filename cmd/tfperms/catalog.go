@@ -412,7 +412,7 @@ func newCatalogScaffoldCmd() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dataSource && iamBinding {
-				return fmt.Errorf("--data-source and --iam-binding are mutually exclusive")
+				return fmt.Errorf("tfperms: --data-source and --iam-binding are mutually exclusive")
 			}
 
 			resourceType := args[0]

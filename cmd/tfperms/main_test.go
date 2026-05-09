@@ -374,18 +374,9 @@ resource "google_storage_bucket" "primary" {
 		t.Fatalf("Execute on file path returned nil; expected an error.\noutput: %s", out.String())
 	}
 	msg := err.Error()
-	// The error must echo the file path the user typed so they can
-	// identify what tfperms rejected.
-	if !strings.Contains(msg, filePath) {
-		t.Errorf("error message missing offending file path %q; got: %q", filePath, msg)
-	}
-	// And it must point the user at the containing directory — that
-	// is what makes the message actionable rather than abstract.
-	if !strings.Contains(msg, "is a file") {
-		t.Errorf("error message missing 'is a file' phrasing; got: %q", msg)
-	}
-	if !strings.Contains(msg, dir) {
-		t.Errorf("error message missing containing directory %q; got: %q", dir, msg)
+	want := "tfperms: expected a directory, got a file: " + filePath + "\n  (run 'tfperms <directory>' instead)"
+	if msg != want {
+		t.Errorf("error message = %q, want %q", msg, want)
 	}
 }
 
@@ -614,16 +605,9 @@ func TestRootCommandErrorsOnNonexistentPath(t *testing.T) {
 		t.Fatalf("Execute on nonexistent path returned nil; expected an error.\noutput: %s", out.String())
 	}
 	msg := err.Error()
-	// The error must echo the path the user typed — verbatim — so
-	// they can identify what tfperms rejected.
-	if !strings.Contains(msg, missing) {
-		t.Errorf("error message missing offending path %q; got: %q", missing, msg)
-	}
-	// And the error must not have been "is a file" — a regression
-	// that mishandled the Stat error and fell through to the
-	// IsDir() check would surface the wrong message.
-	if strings.Contains(msg, "is a file") {
-		t.Errorf("nonexistent path should not surface 'is a file' phrasing; got: %q", msg)
+	want := "tfperms: directory not found: " + missing
+	if msg != want {
+		t.Errorf("error message = %q, want %q", msg, want)
 	}
 }
 
@@ -666,41 +650,46 @@ func TestValidateFormatFlags(t *testing.T) {
 		name      string
 		format    string
 		roleName  string
-		wantError bool
+		wantError string
 	}{
-		{name: "default flat empty role-name", format: "flat", roleName: "", wantError: false},
-		{name: "flat with valid role-name", format: "flat", roleName: "my_role", wantError: false},
+		{name: "default flat empty role-name", format: "flat", roleName: "", wantError: ""},
+		{name: "flat with valid role-name", format: "flat", roleName: "my_role", wantError: ""},
 		// Spec: --role-name without --format=role is ignored (warning),
 		// not an error. The malformed value is not validated here
 		// because the role formatter never sees it.
-		{name: "flat with invalid role-name does not error", format: "flat", roleName: "ab", wantError: false},
-		{name: "role with valid role-name", format: "role", roleName: "my_role", wantError: false},
-		{name: "role missing role-name", format: "role", roleName: "", wantError: true},
-		{name: "role with too-short role-name", format: "role", roleName: "ab", wantError: true},
-		{name: "role with illegal char in role-name", format: "role", roleName: "a!b", wantError: true},
-		{name: "role with 65-char role-name", format: "role", roleName: strings.Repeat("a", 65), wantError: true},
-		{name: "role with 64-char role-name boundary", format: "role", roleName: strings.Repeat("a", 64), wantError: false},
-		{name: "role with 3-char role-name boundary", format: "role", roleName: "abc", wantError: false},
-		{name: "by-resource happy path", format: "by-resource", roleName: "", wantError: false},
-		{name: "by-resource ignores role-name with valid value", format: "by-resource", roleName: "my_role", wantError: false},
+		{name: "flat with invalid role-name does not error", format: "flat", roleName: "ab", wantError: ""},
+		{name: "role with valid role-name", format: "role", roleName: "my_role", wantError: ""},
+		{name: "role missing role-name", format: "role", roleName: "", wantError: "tfperms: --role-name is required when --format=role"},
+		{name: "role with too-short role-name", format: "role", roleName: "ab", wantError: "tfperms: --role-name must match ^[a-zA-Z0-9_]{3,64}$; got \"ab\"\n  (note: dashes are not allowed; use underscores)"},
+		{name: "role with illegal char in role-name", format: "role", roleName: "a!b", wantError: "tfperms: --role-name must match ^[a-zA-Z0-9_]{3,64}$; got \"a!b\"\n  (note: dashes are not allowed; use underscores)"},
+		{name: "role with 65-char role-name", format: "role", roleName: strings.Repeat("a", 65), wantError: "tfperms: --role-name must match ^[a-zA-Z0-9_]{3,64}$; got \"" + strings.Repeat("a", 65) + "\"\n  (note: dashes are not allowed; use underscores)"},
+		{name: "role with 64-char role-name boundary", format: "role", roleName: strings.Repeat("a", 64), wantError: ""},
+		{name: "role with 3-char role-name boundary", format: "role", roleName: "abc", wantError: ""},
+		{name: "by-resource happy path", format: "by-resource", roleName: "", wantError: ""},
+		{name: "by-resource ignores role-name with valid value", format: "by-resource", roleName: "my_role", wantError: ""},
 		// Companion to the flat case above: by-resource also takes the
 		// warning path, so a malformed role-name is not a validation
 		// error here.
-		{name: "by-resource ignores invalid role-name (no error)", format: "by-resource", roleName: "a!b", wantError: false},
-		{name: "json ignores invalid role-name (no error)", format: "json", roleName: "a!b", wantError: false},
-		{name: "json happy path", format: "json", roleName: "", wantError: false},
-		{name: "unknown format", format: "yaml", roleName: "", wantError: true},
-		{name: "empty format", format: "", roleName: "", wantError: true},
+		{name: "by-resource ignores invalid role-name (no error)", format: "by-resource", roleName: "a!b", wantError: ""},
+		{name: "json ignores invalid role-name (no error)", format: "json", roleName: "a!b", wantError: ""},
+		{name: "json happy path", format: "json", roleName: "", wantError: ""},
+		{name: "unknown format", format: "yaml", roleName: "", wantError: "tfperms: invalid --format value \"yaml\" (must be one of flat, by-resource, role, json)"},
+		{name: "empty format", format: "", roleName: "", wantError: "tfperms: invalid --format value \"\" (must be one of flat, by-resource, role, json)"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateFormatFlags(tc.format, tc.roleName)
-			if tc.wantError && err == nil {
-				t.Fatalf("validateFormatFlags(%q, %q) returned nil; expected an error",
-					tc.format, tc.roleName)
+			if tc.wantError != "" {
+				if err == nil {
+					t.Fatalf("validateFormatFlags(%q, %q) returned nil; expected error %q", tc.format, tc.roleName, tc.wantError)
+				}
+				if got := err.Error(); got != tc.wantError {
+					t.Fatalf("validateFormatFlags(%q, %q) error = %q, want %q", tc.format, tc.roleName, got, tc.wantError)
+				}
+				return
 			}
-			if !tc.wantError && err != nil {
+			if err != nil {
 				t.Fatalf("validateFormatFlags(%q, %q) returned %v; expected nil",
 					tc.format, tc.roleName, err)
 			}
@@ -726,8 +715,9 @@ func TestRootCommandRejectsRoleWithoutName(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Execute with --format=role and no --role-name returned nil; expected validation failure.\noutput: %s", out.String())
 	}
-	if !strings.Contains(err.Error(), "--role-name") {
-		t.Errorf("error message should mention --role-name; got: %v", err)
+	want := "tfperms: --role-name is required when --format=role"
+	if got := err.Error(); got != want {
+		t.Errorf("error message = %q, want %q", got, want)
 	}
 }
 
@@ -746,8 +736,9 @@ func TestRootCommandRejectsInvalidRoleName(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Execute with --role-name=bad-name returned nil; expected validation failure.\noutput: %s", out.String())
 	}
-	if !strings.Contains(err.Error(), "--role-name") {
-		t.Errorf("error message should mention --role-name; got: %v", err)
+	want := "tfperms: --role-name must match ^[a-zA-Z0-9_]{3,64}$; got \"bad-name\"\n  (note: dashes are not allowed; use underscores)"
+	if got := err.Error(); got != want {
+		t.Errorf("error message = %q, want %q", got, want)
 	}
 }
 
@@ -1172,26 +1163,26 @@ func TestResolveFormat(t *testing.T) {
 		explicitFormat bool
 		byResource     bool
 		want           string
-		wantError      bool
+		wantError      string
 	}{
 		{name: "default flat alone", format: "flat", explicitFormat: false, byResource: false, want: "flat"},
 		{name: "explicit json alone", format: "json", explicitFormat: true, byResource: false, want: "json"},
 		{name: "by-resource alone overrides default", format: "flat", explicitFormat: false, byResource: true, want: "by-resource"},
 		{name: "by-resource agrees with --format=by-resource", format: "by-resource", explicitFormat: true, byResource: true, want: "by-resource"},
-		{name: "by-resource conflicts with explicit --format=flat", format: "flat", explicitFormat: true, byResource: true, wantError: true},
-		{name: "by-resource conflicts with --format=role", format: "role", explicitFormat: true, byResource: true, wantError: true},
-		{name: "by-resource conflicts with --format=json", format: "json", explicitFormat: true, byResource: true, wantError: true},
+		{name: "by-resource conflicts with explicit --format=flat", format: "flat", explicitFormat: true, byResource: true, wantError: "tfperms: --by-resource conflicts with --format=flat; pass either --by-resource or --format=by-resource, not both"},
+		{name: "by-resource conflicts with --format=role", format: "role", explicitFormat: true, byResource: true, wantError: "tfperms: --by-resource conflicts with --format=role; pass either --by-resource or --format=by-resource, not both"},
+		{name: "by-resource conflicts with --format=json", format: "json", explicitFormat: true, byResource: true, wantError: "tfperms: --by-resource conflicts with --format=json; pass either --by-resource or --format=by-resource, not both"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := resolveFormat(tc.format, tc.explicitFormat, tc.byResource)
-			if tc.wantError {
+			if tc.wantError != "" {
 				if err == nil {
 					t.Fatalf("resolveFormat(%q, %v, %v) returned nil error; want error", tc.format, tc.explicitFormat, tc.byResource)
 				}
-				if !strings.Contains(err.Error(), "--by-resource") || !strings.Contains(err.Error(), "--format") {
-					t.Errorf("error should name both --by-resource and --format; got: %v", err)
+				if got := err.Error(); got != tc.wantError {
+					t.Errorf("resolveFormat(%q, %v, %v) error = %q, want %q", tc.format, tc.explicitFormat, tc.byResource, got, tc.wantError)
 				}
 				return
 			}
@@ -1289,11 +1280,9 @@ func TestRootCommandByResourceConflictsWithFormat(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Execute with --by-resource and --format=role returned nil; expected conflict error.\noutput: %s", out.String())
 	}
-	if !strings.Contains(err.Error(), "--by-resource") {
-		t.Errorf("conflict error should mention --by-resource; got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "--format") {
-		t.Errorf("conflict error should mention --format; got: %v", err)
+	want := "tfperms: --by-resource conflicts with --format=role; pass either --by-resource or --format=by-resource, not both"
+	if got := err.Error(); got != want {
+		t.Errorf("error message = %q, want %q", got, want)
 	}
 }
 
@@ -1318,11 +1307,9 @@ func TestRootCommandByResourceConflictsWithExplicitFlatFormat(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Execute with --by-resource and --format=flat returned nil; expected conflict error.\noutput: %s", out.String())
 	}
-	if !strings.Contains(err.Error(), "--by-resource") {
-		t.Errorf("conflict error should mention --by-resource; got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "--format") {
-		t.Errorf("conflict error should mention --format; got: %v", err)
+	want := "tfperms: --by-resource conflicts with --format=flat; pass either --by-resource or --format=by-resource, not both"
+	if got := err.Error(); got != want {
+		t.Errorf("error message = %q, want %q", got, want)
 	}
 }
 
@@ -1344,8 +1331,9 @@ func TestRootCommandByResourceWithInvalidFormatReportsInvalidFormat(t *testing.T
 	if err == nil {
 		t.Fatalf("Execute with --by-resource and --format=jsno returned nil; expected invalid-format error.\noutput: %s", out.String())
 	}
-	if !strings.Contains(err.Error(), "invalid --format") {
-		t.Errorf("error should mention invalid --format; got: %v", err)
+	want := "tfperms: invalid --format value \"jsno\" (must be one of flat, by-resource, role, json)"
+	if got := err.Error(); got != want {
+		t.Errorf("error message = %q, want %q", got, want)
 	}
 	// A regression that ran resolveFormat before validateFormatFlags
 	// would surface the conflict error instead of the typo error.

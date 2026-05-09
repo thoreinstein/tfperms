@@ -849,11 +849,11 @@ func formatDiag(diags hcl.Diagnostics) error {
 			file = d.Subject.Filename
 			line = d.Subject.Start.Line
 		}
-		return fmt.Errorf("%s:%d: %s", file, line, d.Summary)
+		return fmt.Errorf("tfperms: %s:%d: %s", file, line, d.Summary)
 	}
 	// Defensive: HasErrors() returned true but the loop found no
 	// error-severity entry. This should be unreachable, but emitting a
 	// generic message is safer than returning nil and pretending the
 	// parse succeeded.
-	return fmt.Errorf("hcl: unknown diagnostic error")
+	return fmt.Errorf("tfperms: hcl: unknown diagnostic error")
 }

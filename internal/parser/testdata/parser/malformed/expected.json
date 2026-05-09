@@ -1,5 +1,5 @@
 {
-  "parse_error": "\u003cSCENARIO_DIR\u003e/main.tf:1: Unclosed configuration block",
+  "parse_error": "tfperms: \u003cSCENARIO_DIR\u003e/main.tf:1: Unclosed configuration block",
   "resources": [],
   "modules": []
 }
