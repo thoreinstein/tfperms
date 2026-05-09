@@ -33,8 +33,9 @@ resource type lands. `tfperms` makes that one command.
 go install github.com/thoreinstein/tfperms/cmd/tfperms@latest
 ```
 
-Homebrew tap and pre-built release binaries (Linux / macOS / Windows on
-amd64 + arm64) are scaffolded in `.goreleaser.yaml` but not yet
+Homebrew tap and pre-built release binaries (Linux on amd64 + arm64,
+macOS on amd64 + arm64, Windows on amd64 — `windows/arm64` is
+explicitly excluded in `.goreleaser.yaml`) are scaffolded but not yet
 published; those install paths land with the first tagged release.
 Until then `go install` from source is the supported path.
 
