@@ -64,7 +64,9 @@ Exit codes:
      any other CLI-surface rejection before the pipeline runs.
   2  Execution error. The directory does not exist, the path was a
      file, the HCL could not be parsed, the embedded catalog is
-     corrupt, or an internal panic was recovered.
+     corrupt, the rendered output could not be written (broken stdout
+     pipe, short write, JSON encode failure), or an internal panic
+     was recovered.
 
 See https://github.com/thoreinstein/tfperms for the full PRD and
 contributing guide.`
@@ -106,15 +108,24 @@ const (
 // recompiling the regex per construction shows up in test timings.
 var roleNameRE = regexp.MustCompile(`^[a-zA-Z0-9_]{3,64}$`)
 
-// parseLoadError marks an error as originating from the parse/load
-// stage of the pipeline (filesystem validation, HCL parsing, catalog
-// loading) rather than from CLI usage validation. run() inspects the
-// error chain via errors.As to map these failures onto exit code 2,
-// distinct from the exit code 1 used for usage errors (bad flags,
-// extra positional arguments, etc.). Keeping the marker as a thin
-// wrapper that delegates Error() and Unwrap() to the inner error means
-// the user-visible message is unchanged: the type is metadata for the
-// dispatch in run(), not a user-facing rewrite.
+// parseLoadError marks an error as originating from an execution stage
+// of the pipeline (filesystem validation, HCL parsing, catalog loading,
+// or reporter writing) rather than from CLI usage validation. run()
+// inspects the error chain via errors.As to map these failures onto
+// exit code 2, distinct from the exit code 1 used for usage errors
+// (bad flags, extra positional arguments, etc.). Keeping the marker as
+// a thin wrapper that delegates Error() and Unwrap() to the inner
+// error means the user-visible message is unchanged: the type is
+// metadata for the dispatch in run(), not a user-facing rewrite.
+//
+// The "parseLoad" name is kept for historical reasons — the type was
+// introduced to cover the parse and load stages and grew to cover the
+// rendering stage when reporter write failures (broken stdout pipe,
+// JSON encode failure, short write) were also reclassified as exit
+// code 2. Read it as "non-usage execution error"; there is no separate
+// reporterError type because the exit-code dispatch does not need to
+// distinguish among execution stages — every execution failure is
+// code 2 and a usage failure is code 1.
 //
 // The type is unexported because the exit-code contract is a CLI-only
 // concern; nothing outside this package should depend on it.
@@ -126,7 +137,7 @@ func (e *parseLoadError) Error() string { return e.err.Error() }
 func (e *parseLoadError) Unwrap() error { return e.err }
 
 // newParseLoadError wraps err with the parseLoadError marker so run()
-// classifies it as a parse/load failure (exit code 2). A nil err
+// classifies it as an execution failure (exit code 2). A nil err
 // returns nil so callers can use the helper unconditionally on an
 // error-returning expression without re-checking for nil first.
 func newParseLoadError(err error) error {
@@ -512,15 +523,24 @@ func runAnalyze(w io.Writer, dir, format, roleName string, quiet, includeDelete 
 	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{ExcludeDelete: !includeDelete})
 	result.Diagnostics = relativizeDiags(diags, dir)
 	relativizeResult(&result, dir)
+	// Reporter write failures (broken stdout pipe, short write,
+	// JSON encode error) are execution failures, not usage failures:
+	// the analyser ran successfully but could not deliver the output.
+	// Wrap each formatter's return with newParseLoadError so run()
+	// classifies the failure as exit code 2 — the same code the parse
+	// and catalog stages use — rather than letting it fall through
+	// the default branch in run() and exit 1. newParseLoadError
+	// passes a nil err through unchanged, so the success path is a
+	// no-op wrap.
 	switch format {
 	case formatByResource:
-		return reporter.RenderByResource(w, result, len(resources), quiet)
+		return newParseLoadError(reporter.RenderByResource(w, result, len(resources), quiet))
 	case formatRole:
-		return reporter.RenderRole(w, result, roleName, version, date)
+		return newParseLoadError(reporter.RenderRole(w, result, roleName, version, date))
 	case formatJSON:
-		return reporter.RenderJSON(w, result, len(resources), version)
+		return newParseLoadError(reporter.RenderJSON(w, result, len(resources), version))
 	default:
-		return reporter.Render(w, result, len(resources), quiet)
+		return newParseLoadError(reporter.Render(w, result, len(resources), quiet))
 	}
 }
 
@@ -644,18 +664,22 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 //     --format value, an extra positional argument, or any other input
 //     that the CLI surface rejects before the pipeline runs. Cobra's
 //     own argument-validation errors land here too.
-//   - 2  Execution error. The parse / load stage of the pipeline failed
-//     (missing directory, file passed where a directory was expected,
-//     malformed HCL, corrupt embedded catalog) or an internal panic
-//     was recovered. A code 2 is the right hard-fail signal for CI:
-//     the configuration could not be analysed, regardless of what its
-//     contents would have implied.
+//   - 2  Execution error. Any non-usage stage of the pipeline failed:
+//     parse/load (missing directory, file passed where a directory was
+//     expected, malformed HCL, corrupt embedded catalog) or render
+//     (broken stdout pipe, short write, JSON encode failure). An
+//     internal panic recovered by run() also lands here. A code 2 is
+//     the right hard-fail signal for CI: the configuration could not
+//     be analysed (or the result could not be delivered), regardless
+//     of what its contents would have implied.
 //
 // Classification: errors wrapped in *parseLoadError, or any error whose
 // chain contains catalog.ErrCatalog, get exit code 2; everything else
 // gets exit code 1. Recovered panics are unconditionally code 2 — a
 // panic is by definition an unexpected internal failure, not a user
-// usage problem.
+// usage problem. runAnalyze wraps every reporter return value with
+// newParseLoadError so a write failure during rendering also reaches
+// the code-2 branch.
 //
 // Error reporting policy: every error that reaches stderr is prefixed
 // with `tfperms: ` exactly once. Errors built inside the codebase
