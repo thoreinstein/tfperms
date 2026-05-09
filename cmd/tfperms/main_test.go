@@ -465,6 +465,168 @@ resource "google_storage_bucket" "primary" {
 	}
 }
 
+// TestRootCommandIncludeDeleteFlagMatrix is the regression battery for
+// the --include-delete / --exclude-delete reconciliation rule in PreRunE.
+// The rule is: --exclude-delete is sugar for --include-delete=false, but
+// only the truthy form (`--exclude-delete` or `--exclude-delete=true`)
+// overrides --include-delete. An explicit `--exclude-delete=false`
+// matches the default and must never flip --include-delete back on —
+// otherwise `tfperms --include-delete=false --exclude-delete=false`
+// would silently re-enable Delete permissions, which contradicts the
+// documented flag contract.
+//
+// The wantDelete column captures whether storage.buckets.delete is
+// expected to appear in the rendered flat output. storage_bucket is the
+// shared fixture's catalogued resource and the only catalog entry
+// contributing storage.buckets.delete (a pure Delete-stage permission),
+// so its presence is a direct proxy for IncludeDelete.
+//
+// Cases include:
+//   - explicit boolean forms for each flag in isolation,
+//   - both flags set with values that agree, and
+//   - both flags set with values that disagree (where the truthy
+//     --exclude-delete=true overrides, but `--exclude-delete=false`
+//     does not).
+func TestRootCommandIncludeDeleteFlagMatrix(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantDelete bool
+	}{
+		{
+			name:       "default no flags includes delete",
+			args:       []string{},
+			wantDelete: true,
+		},
+		{
+			name:       "include-delete=true alone",
+			args:       []string{"--include-delete=true"},
+			wantDelete: true,
+		},
+		{
+			name:       "include-delete=false alone",
+			args:       []string{"--include-delete=false"},
+			wantDelete: false,
+		},
+		{
+			name:       "exclude-delete bare flag",
+			args:       []string{"--exclude-delete"},
+			wantDelete: false,
+		},
+		{
+			name:       "exclude-delete=true alone",
+			args:       []string{"--exclude-delete=true"},
+			wantDelete: false,
+		},
+		{
+			name:       "exclude-delete=false alone is a no-op",
+			args:       []string{"--exclude-delete=false"},
+			wantDelete: true,
+		},
+		{
+			// Both flags agree (include is on, exclude is off).
+			name:       "include-delete=true exclude-delete=false agree",
+			args:       []string{"--include-delete=true", "--exclude-delete=false"},
+			wantDelete: true,
+		},
+		{
+			// Both flags agree (include is off, exclude is on).
+			name:       "include-delete=false exclude-delete=true agree",
+			args:       []string{"--include-delete=false", "--exclude-delete=true"},
+			wantDelete: false,
+		},
+		{
+			// Regression for the bug review caught: the user said
+			// "exclude" via the canonical flag and an explicit
+			// no-op via the alias; the alias must NOT re-enable
+			// Delete permissions.
+			name:       "include-delete=false exclude-delete=false keeps delete suppressed",
+			args:       []string{"--include-delete=false", "--exclude-delete=false"},
+			wantDelete: false,
+		},
+		{
+			// Truthy --exclude-delete overrides --include-delete=true.
+			name:       "include-delete=true exclude-delete=true exclude wins",
+			args:       []string{"--include-delete=true", "--exclude-delete=true"},
+			wantDelete: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+			root := newRootCmd()
+			out := &bytes.Buffer{}
+			root.SetOut(out)
+			root.SetErr(out)
+			// Path positional comes last — cobra is permissive
+			// about flag/positional ordering, but pinning the
+			// order keeps the test predictable.
+			args := append([]string{}, tc.args...)
+			args = append(args, dir)
+			root.SetArgs(args)
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("Execute %v: %v\noutput: %s", args, err, out.String())
+			}
+
+			got := out.String()
+			hasDelete := strings.Contains(got, "storage.buckets.delete")
+			if hasDelete != tc.wantDelete {
+				t.Errorf("storage.buckets.delete present = %v, want %v\nargs: %v\noutput:\n%s",
+					hasDelete, tc.wantDelete, args, got)
+			}
+		})
+	}
+}
+
+// TestRootCommandErrorsOnNonexistentPath pins the regression that an
+// explicit positional argument naming a path that does not exist on disk
+// is rejected with an error that echoes the user-supplied path. This is
+// the os.Stat error branch in RunE: parser.LoadRecursive would otherwise
+// produce a less-actionable "no such file or directory" wrapped in a
+// load-stage prefix, but the os.Stat probe happens before the pipeline
+// runs so the user sees the path they typed verbatim.
+//
+// The path is constructed under t.TempDir() so the assertion stays
+// hermetic — there is no `/no/such/dir` collision risk against a real
+// filesystem entry on a developer machine. Asserting on the verbatim
+// path also pins that the error uses the raw argument (not the
+// absolutized form), matching the contract of TestRootCommandErrorsOnFile.
+func TestRootCommandErrorsOnNonexistentPath(t *testing.T) {
+	parent := t.TempDir()
+	missing := filepath.Join(parent, "no-such-dir")
+
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{missing})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("Execute on nonexistent path returned nil; expected an error.\noutput: %s", out.String())
+	}
+	msg := err.Error()
+	// The error must echo the path the user typed — verbatim — so
+	// they can identify what tfperms rejected.
+	if !strings.Contains(msg, missing) {
+		t.Errorf("error message missing offending path %q; got: %q", missing, msg)
+	}
+	// And the error must not have been "is a file" — a regression
+	// that mishandled the Stat error and fell through to the
+	// IsDir() check would surface the wrong message.
+	if strings.Contains(msg, "is a file") {
+		t.Errorf("nonexistent path should not surface 'is a file' phrasing; got: %q", msg)
+	}
+}
+
 // TestRootCommandRejectsExtraArgs guards the cobra.MaximumNArgs(1)
 // constraint. Two positional arguments must fail at parse time so the
 // help text and the implemented surface stay aligned — accepting more
