@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,6 +306,89 @@ func TestParseLoadErrorPreservesMessage(t *testing.T) {
 	// and rely on it returning nil when there is nothing to wrap.
 	if got := newParseLoadError(nil); got != nil {
 		t.Errorf("newParseLoadError(nil) = %v, want nil", got)
+	}
+}
+
+// runRootWithStdout drives a fresh root command through run() with the
+// given args and the supplied stdout writer. Mirrors runRoot but lets
+// the caller inject a writer that fails — runRoot's bytes.Buffer always
+// succeeds, so it cannot exercise the reporter-write branch. Returns
+// (exitCode, stderrText) like runRoot.
+func runRootWithStdout(t *testing.T, stdout io.Writer, args ...string) (int, string) {
+	t.Helper()
+	cmd := newRootCmd()
+	stderr := &bytes.Buffer{}
+	cmd.SetOut(stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs(args)
+	code := run(cmd, stderr)
+	return code, stderr.String()
+}
+
+// TestRunExitsTwoOnReporterWriteFailure pins the contract that a write
+// failure from any reporter format (flat, by-resource, role, json) is
+// classified as an execution error (exit code 2), not a usage error
+// (exit code 1). The four reporter functions Render, RenderByResource,
+// RenderRole, and RenderJSON each surface broken-stdout / short-write
+// / encode failures as a non-nil error; runAnalyze wraps those returns
+// in newParseLoadError so run()'s errors.As branch detects them.
+//
+// A regression that dropped the wrap from any one of the four formatter
+// branches in runAnalyze would let a reporter write failure exit 1 and
+// silently misclassify a delivery failure as a CLI usage problem. Each
+// row below targets a single formatter so a per-format regression
+// produces a per-row failure that names the offending case directly.
+//
+// The fixture is a minimal catalogued resource so the resolver returns
+// a non-empty result and every formatter reaches the writer — an empty
+// result would still hit the summary line, but exercising a populated
+// result also pins the multi-line write paths in by-resource and role.
+func TestRunExitsTwoOnReporterWriteFailure(t *testing.T) {
+	dir := writeExitCodeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "flat (default)",
+			args: []string{dir},
+		},
+		{
+			name: "by-resource",
+			args: []string{"--by-resource", dir},
+		},
+		{
+			name: "role",
+			args: []string{"--format=role", "--role-name=test_role", dir},
+		},
+		{
+			name: "json",
+			args: []string{"--format=json", dir},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// byteBudget: 0 — every Write fails immediately with
+			// errBrokenPipe, so the very first reporter write surfaces
+			// the error. We deliberately do not vary the budget across
+			// formats: the contract under test is "any reporter write
+			// failure ⇒ exit 2", not "the formatter writes at least N
+			// bytes before failing". Per-format byte counts are pinned
+			// in the reporter package's own tests.
+			code, stderr := runRootWithStdout(t, &failingWriter{byteBudget: 0}, tc.args...)
+			if code != 2 {
+				t.Errorf("reporter write failure should exit 2; got code=%d stderr=%q", code, stderr)
+			}
+			if !strings.HasPrefix(stderr, "tfperms: ") {
+				t.Errorf("stderr should carry tfperms: prefix; got %q", stderr)
+			}
+		})
 	}
 }
 

@@ -57,7 +57,7 @@ alongside a successful analysis.
 |------|---------|----------|
 | 0    | Analysis completed successfully. | The configuration was parsed, resolved, and rendered. Unknowns / unresolved conditionals may appear in the output but the run is considered a success. |
 | 1    | Usage error. The CLI rejected the invocation before the pipeline ran. | Invalid `--format` value, missing `--role-name` with `--format=role`, extra positional arguments, conflicting `--by-resource` / `--format`. |
-| 2    | Execution error. Analysis could not be performed. | Directory does not exist, path was a file rather than a directory, HCL could not be parsed, embedded catalog is corrupt, internal panic was recovered. |
+| 2    | Execution error. Analysis could not be performed, or the result could not be delivered. | Directory does not exist, path was a file rather than a directory, HCL could not be parsed, embedded catalog is corrupt, the rendered output could not be written (broken stdout pipe, short write, JSON encode failure), internal panic was recovered. |
 
 For local development:
 
