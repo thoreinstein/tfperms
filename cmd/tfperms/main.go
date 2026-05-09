@@ -196,10 +196,8 @@ func newRootCmd() *cobra.Command {
 			// (which now only enforces it under --format=role); here we
 			// notice that the user passed --role-name at all without the
 			// format that would consume it.
-			if roleName != "" && format != formatRole {
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"warning: --role-name=%q is ignored without --format=role\n",
-					roleName)
+			if cmd.Flags().Changed("role-name") && format != formatRole {
+				cmd.PrintErrf("warning: --role-name=%q is ignored without --format=role\n", roleName)
 			}
 			// --exclude-delete is sugar for --include-delete=false,
 			// so it only overrides when the user actually asked to
