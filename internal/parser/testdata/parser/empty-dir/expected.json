@@ -1,5 +1,5 @@
 {
-  "walker_error": "no .tf files in \u003cSCENARIO_DIR\u003e",
+  "walker_error": "tfperms: no .tf files found in \u003cSCENARIO_DIR\u003e",
   "resources": [],
   "modules": []
 }

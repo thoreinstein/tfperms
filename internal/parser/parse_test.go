@@ -215,7 +215,7 @@ func TestParse(t *testing.T) {
 			},
 			order:   []string{"bad.tf"},
 			wantErr: true,
-			errFrag: "bad.tf:",
+			errFrag: "bad.tf:1: ",
 		},
 	}
 
@@ -231,6 +231,9 @@ func TestParse(t *testing.T) {
 					t.Fatalf("expected error, got nil (result: %v)", got)
 				}
 				msg := err.Error()
+				if !strings.HasPrefix(msg, "tfperms: ") {
+					t.Errorf("error message missing 'tfperms: ' prefix; got %q", msg)
+				}
 				if strings.Contains(msg, "\n") {
 					t.Errorf("error message must be single-line; got %q", msg)
 				}
