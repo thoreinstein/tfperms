@@ -29,12 +29,12 @@ import (
 // code 2 branch on its own; the cases here cover the rest.
 
 // runRoot drives a freshly-built rootCmd through run() with the given
-// args and returns (exitCode, stderrText). Output is sunk into a buffer
-// so a test can assert on the rendered error message alongside the
-// classification. SilenceUsage / SilenceErrors are inherited from
-// newRootCmd; we set Out/Err to the same buffer so cobra's own writes
-// (warnings emitted from PreRunE) and run()'s stderr writes are
-// distinguishable in the assertions below.
+// args and returns (exitCode, stderrText). SilenceUsage / SilenceErrors
+// are inherited from newRootCmd. cmd.SetOut and cmd.SetErr point at two
+// separate throwaway buffers (cobra's stdout/stderr sinks); the stderr
+// text returned to the caller comes from the dedicated `stderr` buffer
+// passed into run(), which is where run() writes its rendered error
+// message.
 func runRoot(t *testing.T, args ...string) (int, string) {
 	t.Helper()
 	cmd := newRootCmd()

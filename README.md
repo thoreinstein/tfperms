@@ -40,9 +40,10 @@ tfperms catalog stats                                # summarise the embedded ca
 tfperms catalog scaffold google_<service>_<resource> # write a stub entry under ./catalog/
 ```
 
-`tfperms catalog --help` lists every supported subcommand. The bare
-`tfperms` root command is reserved for the in-progress
-Terraform-configuration analyser and is currently a no-op.
+`tfperms catalog --help` lists every supported subcommand. Running
+`tfperms <path>` analyses the given Terraform directory using the
+in-progress (experimental) analyser, subject to the exit-code contract
+documented below.
 
 ### Exit codes
 
