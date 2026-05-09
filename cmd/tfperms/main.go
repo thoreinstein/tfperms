@@ -306,7 +306,7 @@ func runAnalyze(w io.Writer, dir, format, roleName string, quiet bool) error {
 	if err != nil {
 		return fmt.Errorf("load catalog: %w", err)
 	}
-	result := resolver.Resolve(resources, cat)
+	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{IncludeDelete: true})
 	result.Diagnostics = relativizeDiags(diags, dir)
 	relativizeResult(&result, dir)
 	switch format {

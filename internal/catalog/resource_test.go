@@ -147,7 +147,7 @@ func runResourceFixture(t *testing.T, cat *catalog.Catalog, service, resourceTyp
 		t.Fatalf("parser.LoadRecursive %s: %v", scenarioDir, err)
 	}
 
-	res := resolver.Resolve(resources, cat)
+	res := resolver.Resolve(resources, cat, resolver.ResolveOptions{IncludeDelete: true})
 	relativizeResultPaths(&res, absDir)
 
 	got, err := json.MarshalIndent(res, "", "  ")
