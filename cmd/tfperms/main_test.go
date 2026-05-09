@@ -862,6 +862,46 @@ resource "google_storage_bucket" "primary" {
 	}
 }
 
+// TestRootCommandEmptyRoleNameFlagWithoutRoleFormatWarns pins the
+// regression that an explicit empty --role-name= (the flag was set by
+// the user but to the zero value) still triggers the warning when
+// --format=role is absent. A previous gate of `roleName != ""` would
+// silently accept this case, hiding a typo from the user. The fix
+// drives the gate off cmd.Flags().Changed("role-name") so "the user
+// typed --role-name" is detected regardless of value.
+func TestRootCommandEmptyRoleNameFlagWithoutRoleFormatWarns(t *testing.T) {
+	dir := writeFixture(t, `
+resource "google_storage_bucket" "primary" {
+  name                        = "tfperms-empty-name-fixture"
+  location                    = "US"
+  uniform_bucket_level_access = false
+}
+`)
+
+	root := newRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"--role-name=", dir})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute with explicit empty --role-name= (no --format=role) returned %v; expected warning, not error.\nstdout:\n%s\nstderr:\n%s",
+			err, stdout.String(), stderr.String())
+	}
+
+	gotErr := stderr.String()
+	if !strings.Contains(gotErr, "warning:") {
+		t.Errorf("stderr missing 'warning:' prefix; got: %q", gotErr)
+	}
+	if !strings.Contains(gotErr, "--role-name") {
+		t.Errorf("stderr warning should name --role-name; got: %q", gotErr)
+	}
+	if !strings.Contains(gotErr, "--format=role") {
+		t.Errorf("stderr warning should name --format=role so the user knows the gating flag; got: %q", gotErr)
+	}
+}
+
 // TestRootCommandRoleFormatNoSpuriousWarning is the negative companion
 // to TestRootCommandRoleNameWithoutRoleFormatWarns: when --format=role
 // is set alongside --role-name, the warning must NOT fire (the flag is
