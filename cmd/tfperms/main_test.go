@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestBuildMetadataDefaults locks in the dev-time defaults for the three
@@ -608,6 +611,111 @@ func TestRootCommandErrorsOnNonexistentPath(t *testing.T) {
 	want := "tfperms: directory not found: " + missing
 	if msg != want {
 		t.Errorf("error message = %q, want %q", msg, want)
+	}
+}
+
+// TestRunRecoversFromPanic pins the global error boundary in run().
+// An unexpected panic anywhere in the pipeline (parser, catalog,
+// resolver, reporter, or a future caller) must surface as a single-
+// line `tfperms: internal error (panic): <value>` on stderr and exit
+// non-zero — not as a Go stack trace dumped at a Terraform operator.
+//
+// We drive run() directly with an inline cobra command whose RunE
+// panics, rather than waiting for some real code path to panic. This
+// keeps the assertion hermetic (no dependence on a specific bug being
+// reachable) and pins the recovery contract for every future regression
+// — if someone removes the deferred recover, this test fails loudly.
+//
+// The exit code assertion is just as important as the message: a
+// recovered panic that exited 0 would let CI consumers treat a crashed
+// tfperms run as a successful "no permissions found" result.
+func TestRunRecoversFromPanic(t *testing.T) {
+	cmd := &cobra.Command{
+		Use:           "panicker",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			panic("boom")
+		},
+	}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs(nil)
+
+	stderr := &bytes.Buffer{}
+	code := run(cmd, stderr)
+
+	if code != 1 {
+		t.Errorf("run() exit code = %d, want 1", code)
+	}
+	want := "tfperms: internal error (panic): boom\n"
+	if got := stderr.String(); got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+}
+
+// TestRunPrefixesUnprefixedErrors pins the prefix-once policy in run().
+// Errors built inside tfperms already carry the `tfperms: ` prefix at
+// their source (validateFormatFlags, runAnalyze, parser, walker, ...),
+// but errors that originate elsewhere — cobra's own argument
+// validation, an unwrapped third-party error — do not. The run()
+// helper adds the prefix in the latter case so the user always sees
+// one consistent shape on stderr regardless of which layer rejected
+// the input. The companion TestRunDoesNotDoublePrefix below pins the
+// "do not double-prefix" half of the contract.
+func TestRunPrefixesUnprefixedErrors(t *testing.T) {
+	cmd := &cobra.Command{
+		Use:           "raiser",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("bare error from a third party")
+		},
+	}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs(nil)
+
+	stderr := &bytes.Buffer{}
+	code := run(cmd, stderr)
+
+	if code != 1 {
+		t.Errorf("run() exit code = %d, want 1", code)
+	}
+	want := "tfperms: bare error from a third party\n"
+	if got := stderr.String(); got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+}
+
+// TestRunDoesNotDoublePrefix pins the other half of the prefix-once
+// policy: errors that already carry the `tfperms: ` prefix (the common
+// case for errors built inside this codebase) must not be re-prefixed
+// to `tfperms: tfperms: ...` by the run() helper. A regression here
+// would surface as a visibly broken error message in production but
+// might slip through review because the prefix is "almost right".
+func TestRunDoesNotDoublePrefix(t *testing.T) {
+	cmd := &cobra.Command{
+		Use:           "raiser",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("tfperms: already prefixed")
+		},
+	}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs(nil)
+
+	stderr := &bytes.Buffer{}
+	code := run(cmd, stderr)
+
+	if code != 1 {
+		t.Errorf("run() exit code = %d, want 1", code)
+	}
+	want := "tfperms: already prefixed\n"
+	if got := stderr.String(); got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
 	}
 }
 
