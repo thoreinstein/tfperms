@@ -44,6 +44,21 @@ tfperms catalog scaffold google_<service>_<resource> # write a stub entry under 
 `tfperms` root command is reserved for the in-progress
 Terraform-configuration analyser and is currently a no-op.
 
+### Exit codes
+
+`tfperms` returns one of three exit codes so CI/CD pipelines can
+distinguish "the analyser ran and found a permission set" from
+"something the user can fix" from "something that prevented analysis
+from running at all". Advisory unknowns and unresolved conditionals
+are NOT failures: the v1 spec frames them as diagnostic output
+alongside a successful analysis.
+
+| Code | Meaning | Examples |
+|------|---------|----------|
+| 0    | Analysis completed successfully. | The configuration was parsed, resolved, and rendered. Unknowns / unresolved conditionals may appear in the output but the run is considered a success. |
+| 1    | Usage error. The CLI rejected the invocation before the pipeline ran. | Invalid `--format` value, missing `--role-name` with `--format=role`, extra positional arguments, conflicting `--by-resource` / `--format`. |
+| 2    | Execution error. Analysis could not be performed. | Directory does not exist, path was a file rather than a directory, HCL could not be parsed, embedded catalog is corrupt, internal panic was recovered. |
+
 For local development:
 
 ```sh
