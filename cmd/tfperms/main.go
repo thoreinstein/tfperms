@@ -27,13 +27,49 @@ var (
 	date    = "unknown"
 )
 
-// rootDefaultDir is the path used when the user invokes `tfperms` with
-// no positional argument. It maps to the current working directory. We
-// pass "." rather than calling os.Getwd ourselves because parser.
-// LoadRecursive performs the filepath.Abs resolution and rejects an
-// empty string explicitly — letting it own the lookup keeps the
-// "what does no-arg mean" rule in one place.
-const rootDefaultDir = "."
+// rootLongDescription is the advisory framing surfaced by `tfperms
+// --help` (cobra's Long). Per Epic 7 (tfperms-a6t.1), the long help is
+// the place users learn the v1 limitations and the "output is
+// advisory" framing — without that framing a reader of the rendered
+// permission set might assume tfperms validates against a live
+// project, gates CI, or compares required-vs-granted, none of which
+// it does.
+//
+// The text is a literal block rather than fmt.Sprintf'd so a
+// `tfperms --help` diff stays byte-stable across builds; future edits
+// to the wording are deliberate (and reviewable) rather than
+// emergent from a template variable change.
+const rootLongDescription = `tfperms statically analyzes a Terraform Google Cloud Platform configuration
+and reports the minimum IAM permissions required for 'terraform plan' and
+'terraform apply', separately.
+
+Output is advisory. Use the result as input when defining a custom IAM role
+for a service account running terraform automation.
+
+v1 limitations:
+- Reads HCL directly. Module sources must be local (./, ../); registry,
+  git, and archive modules are listed but not analyzed.
+- Catalog covers ~30-50 most-common google_* resource types. Unknown
+  resources are reported alongside, never silently omitted.
+- tfperms does not validate against a live GCP project, does not gate CI,
+  and does not compare required vs granted permissions.
+
+See https://github.com/thoreinstein/tfperms for the full PRD and
+contributing guide.`
+
+// includeDeleteFlagHelp is the --help text for --include-delete. The
+// trade-off explanation is part of the flag description per
+// tfperms-a6t.2 — users seeing only `--help` (not the PRD) need to
+// understand why they would flip it. Hoisted to a const so the long
+// multi-line block does not crowd newRootCmd, keeping the cobra
+// constructor scannable.
+const includeDeleteFlagHelp = `include catalog Delete permissions in the apply set (default true).
+Pass --include-delete=false (or --exclude-delete) for the strictly
+smaller permission set valid for the next apply assuming no destroys.
+Trade-off:
+  include (default) — sufficient for any apply, including ones that destroy.
+  exclude          — strictly smaller; will fail if terraform actually destroys.
+The default 'include' is correct unless you know your apply will never destroy.`
 
 // Output format selectors for the --format flag. `flat` is the default
 // (the human-readable Render output that shipped in tfperms-ftq.1);
@@ -63,10 +99,17 @@ var roleNameRE = regexp.MustCompile(`^[a-zA-Z0-9_]{3,64}$`)
 // The root command analyses a Terraform configuration and prints the
 // flat-list permission report (Epic 6 / tfperms-ftq.1):
 //
-//   - Optional positional argument: a directory path. Omitted means
-//     `.` (the current working directory). More than one argument is
-//     rejected by cobra at parse time so the help text stays
-//     consistent with the implemented surface.
+//   - One positional argument: a directory path. Zero arguments prints
+//     the long-form help (the advisory framing in rootLongDescription)
+//     and exits 0 — there is no implicit "use cwd" behaviour because
+//     a silent run against the current directory hid the v1 limitations
+//     and the `--help` advisory framing from users invoking tfperms
+//     for the first time. More than one argument is rejected at parse
+//     time so the help text stays consistent with the implemented
+//     surface.
+//   - The positional argument must point at a directory; passing a
+//     file produces a single-line error pointing the user at the
+//     containing directory.
 //   - Pipeline: parser.LoadRecursive(dir) → catalog.Load() →
 //     resolver.Resolve(...) → reporter.Render(stdout, ...).
 //
@@ -88,18 +131,21 @@ func newRootCmd() *cobra.Command {
 	// would otherwise see cross-test bleed if a prior test left a
 	// stale --role-name in package state.
 	var (
-		format     string
-		roleName   string
-		byResource bool
-		quiet      bool
+		format        string
+		roleName      string
+		byResource    bool
+		quiet         bool
+		includeDelete bool
+		excludeDelete bool
 	)
 	cmd := &cobra.Command{
 		Use:     "tfperms [path]",
 		Short:   "Static IAM permission analysis for Terraform GCP configs",
-		Long:    "tfperms statically analyzes Terraform GCP configs and reports the minimum IAM permissions required for plan and apply, separately. It is not for runtime use.",
+		Long:    rootLongDescription,
 		Version: fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
-		// MaximumNArgs(1) — zero or one positional. Zero means "use
-		// rootDefaultDir"; one means "this is the directory to analyse".
+		// MaximumNArgs(1) — zero or one positional. Zero is handled
+		// in RunE (prints help and exits 0); one means "this is the
+		// directory to analyse".
 		Args: cobra.MaximumNArgs(1),
 		// SilenceUsage matches the catalog subcommand tree:
 		// suppressing the trailing usage block on every error
@@ -140,14 +186,43 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			format = effective
+			// --exclude-delete is sugar for --include-delete=false.
+			// When the user explicitly passed it, it overrides the
+			// include-delete value. We deliberately do not error on
+			// "both flags set with conflicting values" — the
+			// later-precedence rule keeps the surface predictable
+			// (matches resolveFormat's permissive shape) without
+			// requiring the user to know the canonical-vs-alias
+			// distinction.
+			if cmd.Flags().Changed("exclude-delete") {
+				includeDelete = !excludeDelete
+			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := rootDefaultDir
-			if len(args) == 1 {
-				dir = args[0]
+			// Zero positional args: print the long-form help (which
+			// includes the advisory framing and v1 caveats) and exit
+			// successfully. cmd.Help() writes to cmd.OutOrStderr by
+			// default; tests redirect that into their capture buffer
+			// via SetOut/SetErr so the assertion sees the body.
+			if len(args) == 0 {
+				return cmd.Help()
 			}
-			return runAnalyze(cmd.OutOrStdout(), dir, format, roleName, quiet)
+			// Path validation runs against the raw argument so the
+			// error message echoes what the user typed (not the
+			// absolutized form). A file argument is rejected with a
+			// pointer to the containing directory — a common new-user
+			// mistake (`tfperms main.tf`) for which the abstract
+			// "must be a directory" message is unhelpful.
+			path := args[0]
+			info, err := os.Stat(path)
+			if err != nil {
+				return fmt.Errorf("path %q: %w", path, err)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("path %q is a file; tfperms analyzes directories — pass %q instead", path, filepath.Dir(path))
+			}
+			return runAnalyze(cmd.OutOrStdout(), path, format, roleName, quiet, includeDelete)
 		},
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
@@ -161,6 +236,12 @@ func newRootCmd() *cobra.Command {
 	// keeps the accurate counts so downstream tooling that greps the
 	// first line still detects diagnostic findings under --quiet.
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "suppress unknown-resource and unresolved-conditional sections in flat and by-resource output (no effect on role/json)")
+	// --include-delete defaults to true (the safe, "any apply" set);
+	// --exclude-delete is sugar for --include-delete=false. Both are
+	// declared so users discovering the flag via `tfperms --help` see
+	// either name; PreRunE reconciles the two if both are set.
+	cmd.Flags().BoolVar(&includeDelete, "include-delete", true, includeDeleteFlagHelp)
+	cmd.Flags().BoolVar(&excludeDelete, "exclude-delete", false, "shorthand for --include-delete=false; suppress catalog Delete permissions from the apply set (overrides --include-delete when both are set)")
 	cmd.AddCommand(newCatalogCmd())
 	return cmd
 }
@@ -297,7 +378,13 @@ func validateFormatFlags(format, roleName string) error {
 // and the JSON v1.0 schema is a stability surface — silently dropping
 // the `unknowns` / `unresolved` arrays under --quiet would break
 // integration consumers that always expect those keys to be present.
-func runAnalyze(w io.Writer, dir, format, roleName string, quiet bool) error {
+//
+// includeDelete maps onto resolver.ResolveOptions.IncludeDelete: true
+// includes catalog Delete permissions in the apply-stage sets (the
+// safe default), false suppresses them. PreRunE reconciles the
+// --include-delete / --exclude-delete pair before the value reaches
+// here, so runAnalyze sees a single, already-decided boolean.
+func runAnalyze(w io.Writer, dir, format, roleName string, quiet, includeDelete bool) error {
 	resources, _, diags, err := parser.LoadRecursive(dir)
 	if err != nil {
 		return fmt.Errorf("load %q: %w", dir, err)
@@ -306,7 +393,7 @@ func runAnalyze(w io.Writer, dir, format, roleName string, quiet bool) error {
 	if err != nil {
 		return fmt.Errorf("load catalog: %w", err)
 	}
-	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{IncludeDelete: true})
+	result := resolver.Resolve(resources, cat, resolver.ResolveOptions{IncludeDelete: includeDelete})
 	result.Diagnostics = relativizeDiags(diags, dir)
 	relativizeResult(&result, dir)
 	switch format {
