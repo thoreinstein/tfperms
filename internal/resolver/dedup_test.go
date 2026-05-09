@@ -21,7 +21,7 @@ func TestResolveDeduplicatesIdenticalResources(t *testing.T) {
 		{Kind: "resource", Type: "google_storage_bucket", Name: "bucket_2"},
 	}
 
-	res := Resolve(resources, cat)
+	res := Resolve(resources, cat, ResolveOptions{IncludeDelete: true})
 
 	// Should be identical to singleResourceCatalog base perms.
 	wantPlan := []string{"storage.buckets.get"}
@@ -70,7 +70,7 @@ func TestResolveUnionsVaryingConditionals(t *testing.T) {
 		},
 	}
 
-	res := Resolve(resources, cat)
+	res := Resolve(resources, cat, ResolveOptions{IncludeDelete: true})
 
 	// Plan should include BOTH conditional permissions.
 	wantPlan := []string{
@@ -109,7 +109,7 @@ func TestResolveDeduplicatesOverlappingPermissions(t *testing.T) {
 		{Kind: "resource", Type: "google_compute_instance", Name: "i"},
 	}
 
-	res := Resolve(resources, cat)
+	res := Resolve(resources, cat, ResolveOptions{IncludeDelete: true})
 
 	// "common.permission" should appear only once.
 	wantPlan := []string{

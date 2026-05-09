@@ -47,7 +47,7 @@ func TestResolveConditionalFires(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"uniform_bucket_level_access": cty.True,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	wantPlan := []string{"storage.buckets.get", "storage.buckets.getIamPolicy"}
 	wantApplyOnly := []string{
@@ -97,7 +97,7 @@ func TestResolveMultipleConditionals(t *testing.T) {
 			"uniform_bucket_level_access": cty.True,
 			"versioning":                  cty.True,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Base permissions + both conditionals' contributions.
 	wantPlan := []string{
@@ -162,7 +162,7 @@ func TestResolveIAMBindingConditional(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"role": cty.StringVal("roles/owner"),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Plan picks up both the base getIamPolicy and the conditional's
 	// projects.getIamPolicy.
@@ -246,7 +246,7 @@ func TestResolveIAMBindingConditionalUnresolved(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"role": cty.NilVal,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Base permissions only — conditional did not fire.
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.getIamPolicy"})
@@ -305,7 +305,7 @@ func TestResolveIAMBindingPreventDestroySuppressesConditionalDelete(t *testing.T
 		Attrs: map[string]cty.Value{
 			"role": cty.StringVal("roles/owner"),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Plan: base getIamPolicy only — conditional contributes only Delete.
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.getIamPolicy"})
@@ -337,7 +337,7 @@ func TestResolveConditionalDoesNotFire(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"uniform_bucket_level_access": cty.False,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
@@ -369,7 +369,7 @@ func TestResolveConditionalUnresolved(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"uniform_bucket_level_access": cty.NilVal,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
@@ -412,7 +412,7 @@ func TestResolveConditionalDefinitiveMismatchSwallowsUnresolved(t *testing.T) {
 			// Unresolved — but irrelevant because of the mismatch above.
 			"uniform_bucket_level_access": cty.NilVal,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertUnresolvedEqual(t, res.Unresolved, nil)
 }
@@ -436,7 +436,7 @@ func TestResolveConditionalNumberInt(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"versioning_count": cty.NumberIntVal(3),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{
 		"storage.buckets.get",
@@ -478,7 +478,7 @@ func TestResolveConditionalNumberInt64Exact(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"quota_limit": cty.NumberIntVal(twoTo53Plus),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 	assertSliceEqual(t, "exact plan_perms", exact.PlanPerms, []string{
 		"storage.buckets.get",
 		"storage.buckets.getIamPolicy",
@@ -494,7 +494,7 @@ func TestResolveConditionalNumberInt64Exact(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"quota_limit": cty.NumberIntVal(twoTo53),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 	assertSliceEqual(t, "off plan_perms", off.PlanPerms, []string{"storage.buckets.get"})
 }
 
@@ -517,7 +517,7 @@ func TestResolveConditionalNumberFloat64(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"sample_ratio": cty.NumberFloatVal(0.25),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{
 		"storage.buckets.get",
@@ -543,7 +543,7 @@ func TestResolveConditionalNumberMismatch(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"versioning_count": cty.NumberIntVal(7),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	// The conditional did not fire — base permissions only.
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
@@ -572,7 +572,7 @@ func TestResolveConditionalNumberWrongType(t *testing.T) {
 			// String "3" must not equal numeric predicate 3.
 			"versioning_count": cty.StringVal("3"),
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 	assertUnresolvedEqual(t, res.Unresolved, nil)
@@ -591,7 +591,7 @@ func TestResolvePreventDestroy(t *testing.T) {
 		Type:           "google_storage_bucket",
 		Name:           "primary",
 		PreventDestroy: true,
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 	// storage.buckets.delete must NOT appear in either apply set.
@@ -636,7 +636,7 @@ func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"uniform_bucket_level_access": cty.True,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	// The base PermissionSet has no Plan beyond storage.buckets.get,
 	// and the conditional contributes only Delete (which prevent_destroy
@@ -650,6 +650,105 @@ func TestResolvePreventDestroySuppressesConditionalDelete(t *testing.T) {
 		"storage.buckets.update",
 	})
 	assertUnresolvedEqual(t, res.Unresolved, nil)
+}
+
+// TestResolveExcludeDelete pins the --exclude-delete CLI behaviour at the
+// resolver layer: a Resolve call with ResolveOptions{IncludeDelete: false}
+// must drop every catalog Delete permission from the apply-stage sets,
+// independently of prevent_destroy. The test exercises the three sites
+// where Delete enters the apply map: the base PermissionSet, a fired
+// Conditional, and the per-resource attribution view (BaseApplyOnly /
+// AppliedConditional.ApplyOnly). All three must drop Delete in lockstep
+// or the global summary and per-resource view disagree on what apply
+// requires.
+//
+// Plan permissions are not affected by IncludeDelete (they are the read
+// permissions terraform plan needs); the test pins that as a positive
+// assertion so a regression that broadly suppressed apply-stage
+// contributions would still fail loudly.
+func TestResolveExcludeDelete(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", []catalog.Conditional{{
+		When: map[string]any{"uniform_bucket_level_access": true},
+		Permissions: catalog.PermissionSet{
+			Plan:   []string{"storage.buckets.getIamPolicy"},
+			Update: []string{"storage.buckets.setIamPolicy"},
+			Delete: []string{"storage.buckets.deleteIamPolicy"},
+		},
+	}})
+
+	res := Resolve([]parser.Resource{{
+		Kind: "resource",
+		Type: "google_storage_bucket",
+		Name: "primary",
+		Attrs: map[string]cty.Value{
+			"uniform_bucket_level_access": cty.True,
+		},
+	}}, cat, ResolveOptions{IncludeDelete: false})
+
+	// Plan is unaffected by --exclude-delete.
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{
+		"storage.buckets.get",
+		"storage.buckets.getIamPolicy",
+	})
+	// Apply: base Create + Update, plus the conditional's Update. Both
+	// Delete sources — base storage.buckets.delete and the fired
+	// conditional's storage.buckets.deleteIamPolicy — must be suppressed.
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
+		"storage.buckets.create",
+		"storage.buckets.setIamPolicy",
+		"storage.buckets.update",
+	})
+	assertSliceEqual(t, "total_apply_perms", res.TotalApplyPerms, []string{
+		"storage.buckets.create",
+		"storage.buckets.get",
+		"storage.buckets.getIamPolicy",
+		"storage.buckets.setIamPolicy",
+		"storage.buckets.update",
+	})
+
+	// Per-resource attribution must agree with the global sets. A
+	// regression that suppressed Delete only at the global aggregation
+	// step (forgetting the per-resource splitPermStrings call) would
+	// leave delete in the BaseApplyOnly slice while it disappeared from
+	// ApplyOnlyPerms — a silent UI inconsistency between the flat and
+	// by-resource reporters.
+	if len(res.Resources) != 1 {
+		t.Fatalf("Resources length: got %d, want 1", len(res.Resources))
+	}
+	rr := res.Resources[0]
+	assertSliceEqual(t, "resources[0].base_plan", rr.BasePlan, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "resources[0].base_apply_only", rr.BaseApplyOnly, []string{
+		"storage.buckets.create",
+		"storage.buckets.update",
+	})
+	if len(rr.Applied) != 1 {
+		t.Fatalf("Resources[0].Applied length: got %d, want 1", len(rr.Applied))
+	}
+	assertSliceEqual(t, "applied[0].plan", rr.Applied[0].Plan, []string{"storage.buckets.getIamPolicy"})
+	assertSliceEqual(t, "applied[0].apply_only", rr.Applied[0].ApplyOnly, []string{"storage.buckets.setIamPolicy"})
+}
+
+// TestResolveExcludeDeleteWithPreventDestroy verifies the AND semantics
+// between IncludeDelete and prevent_destroy: when either gate suppresses
+// Delete, Delete is suppressed; the two flags are independent, not
+// mutually exclusive. Pinned because a later refactor that collapsed the
+// two checks into a single boolean expression would silently change the
+// behaviour for one of the four combinations.
+func TestResolveExcludeDeleteWithPreventDestroy(t *testing.T) {
+	cat := singleResourceCatalog(t, "google_storage_bucket", nil)
+
+	res := Resolve([]parser.Resource{{
+		Kind:           "resource",
+		Type:           "google_storage_bucket",
+		Name:           "primary",
+		PreventDestroy: true,
+	}}, cat, ResolveOptions{IncludeDelete: false})
+
+	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
+	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, []string{
+		"storage.buckets.create",
+		"storage.buckets.update",
+	})
 }
 
 // TestResolvePreventDestroyMultiInstance pins the cross-instance
@@ -697,7 +796,7 @@ func TestResolvePreventDestroyMultiInstance(t *testing.T) {
 				Name:           "unprotected",
 				PreventDestroy: false,
 			},
-		}, cat)
+		}, cat, ResolveOptions{IncludeDelete: true})
 
 		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 		// Delete is present because the unprotected instance contributes it.
@@ -736,7 +835,7 @@ func TestResolvePreventDestroyMultiInstance(t *testing.T) {
 				Name:           "secondary",
 				PreventDestroy: true,
 			},
-		}, cat)
+		}, cat, ResolveOptions{IncludeDelete: true})
 
 		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 		// storage.buckets.delete must NOT appear in either apply set.
@@ -790,7 +889,7 @@ func TestResolvePreventDestroyMultiInstance(t *testing.T) {
 					"uniform_bucket_level_access": cty.True,
 				},
 			},
-		}, cat)
+		}, cat, ResolveOptions{IncludeDelete: true})
 
 		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 		// Both Delete sources surface: base storage.buckets.delete
@@ -837,7 +936,7 @@ func TestResolvePreventDestroyMultiInstance(t *testing.T) {
 					"uniform_bucket_level_access": cty.True,
 				},
 			},
-		}, cat)
+		}, cat, ResolveOptions{IncludeDelete: true})
 
 		assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
 		// Both Delete sources must be suppressed.
@@ -887,7 +986,7 @@ func TestResolveThreeSetPartition(t *testing.T) {
 		Kind: "resource",
 		Type: "google_storage_bucket",
 		Name: "primary",
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	// PlanPerms gets .get.
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, []string{"storage.buckets.get"})
@@ -959,7 +1058,7 @@ func TestResolveUnresolvedDistinguishesResourceAndDataKinds(t *testing.T) {
 	res := Resolve([]parser.Resource{
 		{Kind: "resource", Type: "google_storage_bucket", Name: "primary_resource", Attrs: unresolvedAttrs},
 		{Kind: "data", Type: "google_storage_bucket", Name: "primary_data", Attrs: unresolvedAttrs},
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	// sortedUnresolved sorts by
 	// (File, Line, ResourceType, Attribute, ResourceName, ModulePath).
@@ -1042,7 +1141,7 @@ func TestResolveUnresolvedDistinguishesReusedModuleInstantiations(t *testing.T) 
 			ModulePath: []string{"y"},
 			Attrs:      unresolvedAttrs,
 		},
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Sort tier here is (File, Line, ResourceType, Attribute,
 	// ResourceName, ModulePath). Both rows tie on the first five so
@@ -1104,7 +1203,7 @@ func TestResolveUnresolvedModulePathSortOrder(t *testing.T) {
 		mk([]string{"foo"}),
 		mk(nil),
 		mk([]string{"foo", "bar"}),
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Expected order: nil/empty < ["foo"] < ["foo", "bar"]. All three
 	// rows tie on (File, Line, Type, Attribute, Name) so the only
@@ -1148,7 +1247,7 @@ func TestResolveUnresolvedClonesModulePath(t *testing.T) {
 		Line:       3,
 		ModulePath: parserPath,
 		Attrs:      map[string]cty.Value{"uniform_bucket_level_access": cty.NilVal},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Unresolved) != 1 {
 		t.Fatalf("unresolved length: got %d, want 1", len(res.Unresolved))
@@ -1179,7 +1278,7 @@ func TestResolveUnknownResourceType(t *testing.T) {
 		Kind: "resource",
 		Type: "google_unknown_resource",
 		Name: "x",
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, nil)
 	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, nil)
@@ -1211,7 +1310,7 @@ func TestResolveUnknownDataSourceType(t *testing.T) {
 		Kind: "data",
 		Type: "google_unknown_data",
 		Name: "x",
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertSliceEqual(t, "plan_perms", res.PlanPerms, nil)
 	assertSliceEqual(t, "apply_only_perms", res.ApplyOnlyPerms, nil)
@@ -1244,7 +1343,7 @@ func TestResolveUnknownResourceCapturesSourceLocation(t *testing.T) {
 		{Kind: "resource", Type: "google_unknown", Name: "a", File: "main.tf", Line: 10},
 		{Kind: "resource", Type: "google_unknown", Name: "b", File: "main.tf", Line: 20},
 		{Kind: "resource", Type: "google_unknown", Name: "c", File: "other.tf", Line: 5},
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Sort order is (File, Line, Type, Name): "main.tf" < "other.tf";
 	// within "main.tf", line 10 < line 20.
@@ -1293,7 +1392,7 @@ func TestResolveUnresolvedConditionalCapturesSourceLocation(t *testing.T) {
 			Line:  17,
 			Attrs: unresolvedAttrs,
 		},
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Sort order is (File, Line, ResourceType, Attribute): "buckets.tf"
 	// before "other.tf".
@@ -1359,7 +1458,7 @@ func TestResolveUnresolvedReasonPropagatedFromParser(t *testing.T) {
 		mkResource("a_func", parser.ReasonFunctionCall),
 		mkResource("b_data", parser.ReasonDataSource),
 		mkResource("c_var", parser.ReasonMissingVariable),
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	// Sort tier here is (File, Line, ResourceType, Attribute,
 	// ResourceName). All three rows tie on the first four fields, so
@@ -1418,7 +1517,7 @@ func TestResolveUnresolvedReasonFallback(t *testing.T) {
 			// AttrReasons has no entry to source from.
 		},
 		AttrReasons: map[string]string{},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertUnresolvedEqual(t, res.Unresolved, []UnresolvedConditional{{
 		ResourceType: "google_storage_bucket",
@@ -1444,7 +1543,7 @@ func TestResolveResourcesPopulatedBaseOnly(t *testing.T) {
 		Name: "primary",
 		File: "main.tf",
 		Line: 7,
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Resources) != 1 {
 		t.Fatalf("Resources length: got %d, want 1; full=%#v", len(res.Resources), res.Resources)
@@ -1489,7 +1588,7 @@ func TestResolveResourcesPopulatedConditionalFires(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"uniform_bucket_level_access": cty.True,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Resources) != 1 {
 		t.Fatalf("Resources length: got %d, want 1; full=%#v", len(res.Resources), res.Resources)
@@ -1532,7 +1631,7 @@ func TestResolveResourcesPreventDestroyFiltersDelete(t *testing.T) {
 		File:           "main.tf",
 		Line:           4,
 		PreventDestroy: true,
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Resources) != 1 {
 		t.Fatalf("Resources length: got %d, want 1; full=%#v", len(res.Resources), res.Resources)
@@ -1560,7 +1659,7 @@ func TestResolveResourcesUnknownExcluded(t *testing.T) {
 		Name: "primary",
 		File: "main.tf",
 		Line: 9,
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Resources) != 0 {
 		t.Errorf("Resources should be empty for unknown type; got %#v", res.Resources)
@@ -1598,7 +1697,7 @@ func TestResolveResourcesDisambiguatesReusedModuleInstantiations(t *testing.T) {
 			Line:       3,
 			ModulePath: []string{"y"},
 		},
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Resources) != 2 {
 		t.Fatalf("Resources length: got %d, want 2 (one per module instantiation); full=%#v",
@@ -1631,7 +1730,7 @@ func TestResolveResourcesClonesModulePath(t *testing.T) {
 		File:       "main.tf",
 		Line:       3,
 		ModulePath: parserPath,
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Resources) != 1 {
 		t.Fatalf("Resources length: got %d, want 1", len(res.Resources))
@@ -1669,7 +1768,7 @@ func TestResolveResourcesClonesWhen(t *testing.T) {
 		Attrs: map[string]cty.Value{
 			"uniform_bucket_level_access": cty.True,
 		},
-	}}, cat)
+	}}, cat, ResolveOptions{IncludeDelete: true})
 
 	if len(res.Resources) != 1 || len(res.Resources[0].Applied) != 1 {
 		t.Fatalf("expected one Resources entry with one Applied conditional; got %#v", res.Resources)
@@ -1803,7 +1902,7 @@ func TestResolveUnknownResourceCapturesModulePath(t *testing.T) {
 			File:       "mod/main.tf",
 			Line:       10,
 		},
-	}, cat)
+	}, cat, ResolveOptions{IncludeDelete: true})
 
 	assertUnknownsEqual(t, res.Unknowns, []UnknownResource{
 		{
