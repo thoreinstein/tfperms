@@ -531,7 +531,7 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 }
 
 // run is the testable entry point for the binary. It wraps
-// rootCmd.Execute() with a panic recovery boundary so an unexpected
+// cmd.Execute() with a panic recovery boundary so an unexpected
 // panic anywhere in the pipeline (parser, catalog, resolver, reporter)
 // surfaces as a single-line `tfperms: internal error (panic): <message>`
 // on stderr rather than dumping a Go stack trace at the user. Stack
@@ -539,10 +539,13 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 // operator who is debugging a Terraform configuration, not the
 // internals of tfperms.
 //
-// Returned int is the exit code so a test caller (TestRunPanicRecovery)
-// can drive the function without invoking os.Exit. Splitting run from
-// main is the standard Go pattern for this — main does I/O setup and
-// process exit, run does the work.
+// The cobra command is passed in (rather than built inside run) so a
+// test caller can inject a command whose RunE deliberately panics and
+// observe the recovery path. main() supplies newRootCmd(); production
+// behaviour is unchanged. Returned int is the exit code so the test
+// can drive run without invoking os.Exit. Splitting run from main is
+// the standard Go pattern for this — main does I/O setup and process
+// exit, run does the work.
 //
 // Error reporting policy: every error that reaches stderr is prefixed
 // with `tfperms: ` exactly once. Errors built inside the codebase
@@ -553,7 +556,7 @@ func relativizeDiags(diags hcl.Diagnostics, baseDir string) []resolver.Diagnosti
 // regardless of which layer rejected the input. The `if !strings.HasPrefix`
 // guard prevents the prefix from being doubled when the error already
 // carries it.
-func run(stderr io.Writer) (code int) {
+func run(cmd *cobra.Command, stderr io.Writer) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
 			// A panic during Execute is by definition an internal bug,
@@ -563,8 +566,8 @@ func run(stderr io.Writer) (code int) {
 			// NOT print the stack trace — the user is a Terraform
 			// operator, not a tfperms developer, and the trace would
 			// bury the actionable summary. A developer reproducing the
-			// bug locally can re-run under `go run -gcflags=...` or
-			// rebuild without the recover for a full trace.
+			// bug locally can re-run without the recover for a full
+			// trace.
 			//
 			// `code` is a named return so the deferred recover can set
 			// the exit status without re-entering the normal return
@@ -573,7 +576,7 @@ func run(stderr io.Writer) (code int) {
 			code = 1
 		}
 	}()
-	if err := newRootCmd().Execute(); err != nil {
+	if err := cmd.Execute(); err != nil {
 		msg := err.Error()
 		// Prefix-once policy: errors constructed inside tfperms
 		// (validateFormatFlags, runAnalyze, parser, walker, ...)
@@ -593,5 +596,5 @@ func run(stderr io.Writer) (code int) {
 }
 
 func main() {
-	os.Exit(run(os.Stderr))
+	os.Exit(run(newRootCmd(), os.Stderr))
 }
