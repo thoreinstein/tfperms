@@ -56,6 +56,16 @@ v1 limitations:
 - tfperms does not validate against a live GCP project, does not gate CI,
   and does not compare required vs granted permissions.
 
+Exit codes:
+  0  Analysis completed successfully. Advisory unknowns and unresolved
+     conditionals are reported in the output but are NOT failures.
+  1  Usage error. Invalid flag value, unknown --format, missing
+     --role-name with --format=role, extra positional arguments, or
+     any other CLI-surface rejection before the pipeline runs.
+  2  Execution error. The directory does not exist, the path was a
+     file, the HCL could not be parsed, the embedded catalog is
+     corrupt, or an internal panic was recovered.
+
 See https://github.com/thoreinstein/tfperms for the full PRD and
 contributing guide.`
 
